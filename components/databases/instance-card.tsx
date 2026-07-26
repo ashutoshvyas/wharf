@@ -12,7 +12,7 @@
  */
 import Link from "next/link";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Ellipsis, KeyRound, RotateCcw, ScrollText, Trash2 } from "lucide-react";
+import { Ellipsis, KeyRound, RotateCcw, ScrollText, Trash2, Upload } from "lucide-react";
 import { can, type Role } from "@/lib/rbac";
 import { Alert } from "@/components/ui/alert";
 import { Button, ButtonLink } from "@/components/ui/button";
@@ -39,6 +39,7 @@ export interface InstanceCardProps {
   onViewLog: () => void;
   onRetry: () => void;
   onRemove: () => void;
+  onRestore: () => void;
   /** Opens the full-size progress dialog for this instance. */
   onExpandProgress: () => void;
   /** A progress dialog is already open for this instance — it owns the toast. */
@@ -52,6 +53,7 @@ export function InstanceCard({
   onViewLog,
   onRetry,
   onRemove,
+  onRestore,
   onExpandProgress,
   silentProgress = false,
 }: InstanceCardProps) {
@@ -61,6 +63,7 @@ export function InstanceCard({
   const canStopStart = can(role, "instance.stopstart");
   const canRetry = can(role, "instance.retry");
   const canRemove = can(role, "instance.remove");
+  const canRestore = can(role, "instance.restore");
   const canReveal = can(role, "secrets.reveal");
 
   const busy = isTransitional(instance.status);
@@ -106,6 +109,15 @@ export function InstanceCard({
             label: "Retry provisioning",
             icon: <RotateCcw size={15} strokeWidth={1.75} />,
             onSelect: onRetry,
+          } satisfies DropdownItem,
+        ]
+      : []),
+    ...(instance.status === "running" && canRestore
+      ? [
+          {
+            label: "Restore backup…",
+            icon: <Upload size={15} strokeWidth={1.75} />,
+            onSelect: onRestore,
           } satisfies DropdownItem,
         ]
       : []),
@@ -180,7 +192,13 @@ export function InstanceCard({
       {busy ? (
         <ProvisionProgress
           instanceId={instance.id}
-          kind={instance.status === "removing" ? "remove" : "provision"}
+          kind={
+            instance.status === "removing"
+              ? "remove"
+              : instance.status === "restoring"
+                ? "restore"
+                : "provision"
+          }
           title={`${instance.composeProjectName} · ${serverName}`}
           compact
           onExpand={onExpandProgress}
@@ -189,8 +207,9 @@ export function InstanceCard({
             // A successful provision may have just prepared the server for
             // the first time (architecture §4.1) — refresh its cached query
             // too, or its detail page (and the "Re-run setup" button) stays
-            // stale until something unrelated triggers a refetch.
-            if (instance.status !== "removing" && status === "ok") {
+            // stale until something unrelated triggers a refetch. Restore
+            // never touches bootstrap state, so it doesn't need this.
+            if (instance.status === "provisioning" && status === "ok") {
               void queryClient.invalidateQueries({ queryKey: ["server", instance.serverId] });
               void queryClient.invalidateQueries({ queryKey: ["servers"] });
             }
@@ -202,6 +221,15 @@ export function InstanceCard({
                     ? `${instance.name} removed — volumes destroyed.`
                     : `${instance.name} could not be removed — see log.`,
                 variant: status === "ok" ? "info" : "danger",
+              });
+            } else if (instance.status === "restoring") {
+              toast({
+                title: status === "ok" ? "Restored" : undefined,
+                message:
+                  status === "ok"
+                    ? `${instance.name} restored — a snapshot of its previous data was kept on the server.`
+                    : `${instance.name} restore failed — see log.`,
+                variant: status === "ok" ? "success" : "danger",
               });
             } else {
               toast({

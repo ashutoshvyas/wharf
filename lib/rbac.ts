@@ -23,6 +23,7 @@ export type Action =
   | "instance.stopstart"
   | "instance.retry"
   | "instance.remove"
+  | "instance.restore"
   | "secrets.reveal"
   | "audit.read"
   | "users";
@@ -45,6 +46,9 @@ const MATRIX: Record<Action, Role[]> = {
   "instance.stopstart": OPERATOR_UP,
   "instance.retry": OPERATOR_UP,
   "instance.remove": ADMIN_ONLY,
+  // At least as destructive as remove (it overwrites live data in place),
+  // same tier.
+  "instance.restore": ADMIN_ONLY,
   "secrets.reveal": OPERATOR_UP,
   "audit.read": ALL,
   users: ADMIN_ONLY,

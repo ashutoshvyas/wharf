@@ -16,12 +16,14 @@ export type InstanceStatus =
   | "running"
   | "stopped"
   | "error"
-  | "removing";
+  | "removing"
+  | "restoring";
 
 /** Statuses that mean "a job is in flight" — drives the 5s poll (design §6). */
 const TRANSITIONAL: readonly InstanceStatus[] = [
   "provisioning",
   "removing",
+  "restoring",
 ] as const;
 
 export interface InstanceServerRef {
@@ -190,6 +192,30 @@ export async function removeInstance(
   );
 }
 
+/**
+ * Uploads a backup (a .zip/.backup/.dump/.sql file) for restore into an
+ * existing, `running` instance. `confirmName` must equal the instance name
+ * (else 400/409). The body is the raw file bytes — this is not a JSON
+ * payload — so the original filename travels as a header instead.
+ */
+export async function restoreInstance(
+  id: string,
+  confirmName: string,
+  file: File,
+): Promise<JobAcceptedDto> {
+  return apiFetch<JobAcceptedDto>(
+    `/api/db-instances/${id}/restore?confirmName=${encodeURIComponent(confirmName)}`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/octet-stream",
+        "X-Backup-Filename": file.name,
+      },
+      body: file,
+    },
+  );
+}
+
 /** Audited on the server; never cached. */
 export async function fetchInstanceSecrets(
   id: string,
@@ -218,6 +244,11 @@ export async function checkSlugAvailable(
  */
 export function instanceLogUrl(id: string): string {
   return `/api/db-instances/${id}/provision-log`;
+}
+
+/** SSE endpoint for a restore job. */
+export function restoreLogUrl(id: string): string {
+  return `/api/db-instances/${id}/restore-log`;
 }
 
 /** Slug rules from contract §7. */

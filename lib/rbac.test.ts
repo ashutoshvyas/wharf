@@ -28,6 +28,7 @@ describe("can() — role matrix spot checks", () => {
       "instance.stopstart",
       "instance.retry",
       "instance.remove",
+      "instance.restore",
       "secrets.reveal",
       "users",
     ];
@@ -59,6 +60,7 @@ describe("can() — role matrix spot checks", () => {
       "server.bootstrap",
       "server.delete",
       "instance.remove",
+      "instance.restore",
       "users",
     ];
     it.each(denied)("operator cannot %s", (action) => {
@@ -81,6 +83,7 @@ describe("can() — role matrix spot checks", () => {
       "instance.stopstart",
       "instance.retry",
       "instance.remove",
+      "instance.restore",
       "secrets.reveal",
       "audit.read",
       "users",

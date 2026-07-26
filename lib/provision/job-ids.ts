@@ -15,3 +15,7 @@ export function provisionJobId(instanceId: string): string {
 export function removeJobId(instanceId: string): string {
   return `remove:${instanceId}`;
 }
+
+export function restoreJobId(instanceId: string): string {
+  return `restore:${instanceId}`;
+}

@@ -35,20 +35,26 @@ type SshConnection = Parameters<typeof exec>[0];
 export const INSTANCE_PATH_PREFIX = "/opt/db-instances";
 
 /**
- * Re-validate a stored remote path before deleting it. Returns the path when
- * it is exactly `/opt/db-instances/{composeProjectName}`; throws otherwise.
+ * Re-validate a stored remote path before writing to or deleting it. Returns
+ * the path when it is exactly `/opt/db-instances/{composeProjectName}`,
+ * throws otherwise. Shared with lib/provision/restore.ts, which passes
+ * `action: "RESTORE INTO"` since it uploads rather than deletes.
  * Exported for the unit test that feeds it a tampered row.
  */
-export function assertSafeRemotePath(remotePath: string, project: string): string {
+export function assertSafeRemotePath(
+  remotePath: string,
+  project: string,
+  action = "DELETE",
+): string {
   const expected = `${INSTANCE_PATH_PREFIX}/${project}`;
   const shapeOk = new RegExp(
     `^${INSTANCE_PATH_PREFIX}/[A-Za-z0-9][A-Za-z0-9_.-]*$`,
   ).test(remotePath);
   if (!shapeOk || remotePath !== expected) {
     throw new Error(
-      `REFUSING TO DELETE ${remotePath}: it is not this instance's directory ` +
+      `REFUSING TO ${action} ${remotePath}: it is not this instance's directory ` +
         `(expected exactly ${expected}). The db_instances row looks tampered with — ` +
-        "nothing was removed from disk; investigate before retrying.",
+        "nothing was written to or removed from disk; investigate before retrying.",
     );
   }
   return expected;

@@ -25,9 +25,9 @@ import { Button } from "@/components/ui/button";
 import { LogStream, type LogLine, type LogLineKind } from "@/components/ui/log-stream";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { useJobStream } from "@/components/servers/use-job-stream";
-import { instanceLogUrl } from "./api";
+import { instanceLogUrl, restoreLogUrl } from "./api";
 
-export type JobKind = "provision" | "remove";
+export type JobKind = "provision" | "remove" | "restore";
 export type PhaseState = "pending" | "active" | "done" | "failed";
 
 interface PhaseDef {
@@ -56,6 +56,14 @@ export const REMOVE_PHASES: readonly PhaseDef[] = [
   { id: "metadata", label: "Release metadata" },
 ];
 
+/** Restore phases (`upload → snapshot → restore → cleanup`, ). */
+export const RESTORE_PHASES: readonly PhaseDef[] = [
+  { id: "upload", label: "Upload backup" },
+  { id: "snapshot", label: "Snapshot current data" },
+  { id: "restore", label: "Restore" },
+  { id: "cleanup", label: "Clean up" },
+];
+
 export interface PhaseRow {
   id: string;
   label: string;
@@ -72,7 +80,9 @@ const GLYPH_STATE: Record<string, PhaseState> = {
 };
 
 export function phaseDefs(kind: JobKind): readonly PhaseDef[] {
-  return kind === "remove" ? REMOVE_PHASES : PROVISION_PHASES;
+  if (kind === "remove") return REMOVE_PHASES;
+  if (kind === "restore") return RESTORE_PHASES;
+  return PROVISION_PHASES;
 }
 
 /**
@@ -236,7 +246,9 @@ export function ProvisionProgress({
   onExpand,
   className,
 }: ProvisionProgressProps) {
-  const { status, lines, reconnect } = useJobStream(instanceLogUrl(instanceId));
+  const { status, lines, reconnect } = useJobStream(
+    kind === "restore" ? restoreLogUrl(instanceId) : instanceLogUrl(instanceId),
+  );
   const phases = derivePhases(lines, kind);
   const handledRef = useRef(false);
 
@@ -260,7 +272,9 @@ export function ProvisionProgress({
     status === "streaming"
       ? kind === "remove"
         ? "removing"
-        : "provisioning"
+        : kind === "restore"
+          ? "restoring"
+          : "provisioning"
       : status === "ok"
         ? "running"
         : "error";

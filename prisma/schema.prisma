@@ -31,6 +31,7 @@ enum InstanceStatus {
   stopped
   error
   removing
+  restoring
 }
 
 model Server {

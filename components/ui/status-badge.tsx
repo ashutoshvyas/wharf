@@ -7,6 +7,7 @@ export type Status =
   | "stopped"
   | "error"
   | "removing"
+  | "restoring"
   | "working"
   | "bootstrapped"
   | "not_bootstrapped"
@@ -45,6 +46,12 @@ const SPECS: Record<Status, StatusSpec> = {
     label: "removing",
     pill: "bg-tint-danger text-danger",
     dot: "bg-danger",
+    pulse: true,
+  },
+  restoring: {
+    label: "restoring",
+    pill: "bg-coral-50 text-coral-700",
+    dot: "bg-coral-500",
     pulse: true,
   },
   working: {

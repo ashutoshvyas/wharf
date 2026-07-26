@@ -33,6 +33,7 @@ import { InstanceCard } from "./instance-card";
 import { LogTailModal } from "./log-tail-modal";
 import { NewInstanceModal } from "./new-instance-modal";
 import { ProvisionProgress } from "./provision-progress";
+import { RestoreBackupModal } from "./restore-backup-modal";
 import { SecretsModal } from "./secrets-modal";
 
 const POLL_TRANSITIONAL_MS = 5_000;
@@ -52,12 +53,14 @@ export function DatabasesView({
   const canProvision = can(role, "instance.provision");
   const canRetry = can(role, "instance.retry");
   const canRemove = can(role, "instance.remove");
+  const canRestore = can(role, "instance.restore");
 
   const [newOpen, setNewOpen] = useState(false);
   const [secretsFor, setSecretsFor] = useState<InstanceDto | null>(null);
   const [logFor, setLogFor] = useState<InstanceDto | null>(null);
   const [removeFor, setRemoveFor] = useState<InstanceDto | null>(null);
   const [forceRemove, setForceRemove] = useState(false);
+  const [restoreFor, setRestoreFor] = useState<InstanceDto | null>(null);
   const [progressFor, setProgressFor] = useState<InstanceDto | null>(null);
   /** Instance the new-instance modal is currently streaming. */
   const [modalProvisioningId, setModalProvisioningId] = useState<string | null>(null);
@@ -106,7 +109,11 @@ export function DatabasesView({
 
   /** The card must not double-toast a stream a dialog is already narrating. */
   function isSilent(instance: InstanceDto): boolean {
-    return progressFor?.id === instance.id || modalProvisioningId === instance.id;
+    return (
+      progressFor?.id === instance.id ||
+      modalProvisioningId === instance.id ||
+      restoreFor?.id === instance.id
+    );
   }
 
   return (
@@ -175,6 +182,9 @@ export function DatabasesView({
               }}
               onRemove={() => {
                 if (canRemove) setRemoveFor(instance);
+              }}
+              onRestore={() => {
+                if (canRestore) setRestoreFor(instance);
               }}
               onExpandProgress={() => setProgressFor(instance)}
             />
@@ -276,6 +286,12 @@ export function DatabasesView({
           </>
         )}
       </ConfirmModal>
+
+      <RestoreBackupModal
+        open={restoreFor !== null}
+        onClose={() => setRestoreFor(null)}
+        instance={restoreFor}
+      />
     </div>
   );
 }
