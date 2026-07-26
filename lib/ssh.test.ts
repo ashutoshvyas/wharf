@@ -160,7 +160,9 @@ function makeChannel() {
 function makeSftp() {
   const calls: string[] = [];
   const ok = (cb: (err: Error | null) => void) => queueMicrotask(() => cb(null));
-  const sftp = {
+  // Real EventEmitter: getSftp() registers .once('close'/'error', ...) to
+  // invalidate the channel cache, matching ssh2's actual SFTPWrapper shape.
+  const sftp = Object.assign(new EventEmitter(), {
     calls,
     mkdir: vi.fn((path: string, cb: (err: Error | null) => void) => {
       calls.push(`mkdir:${path}`);
@@ -186,7 +188,7 @@ function makeSftp() {
       calls.push(`rename:${src}->${dest}`);
       ok(cb);
     }),
-  };
+  });
   return sftp;
 }
 
@@ -467,11 +469,12 @@ describe("exec", () => {
 // ---------------------------------------------------------------------------
 
 describe("sftpWrite", () => {
+  /** `.sftp` is a spy so tests can assert how many times a channel was opened. */
   function connWithSftp(sftp: ReturnType<typeof makeSftp>) {
-    sshState.onSftp = (cb) => queueMicrotask(() => cb(undefined, sftp));
-    return {
-      sftp: (cb: (err: Error | undefined, s: unknown) => void) => sshState.onSftp!(cb),
-    } as unknown as Conn;
+    const sftpOpen = vi.fn((cb: (err: Error | undefined, s: unknown) => void) => {
+      queueMicrotask(() => cb(undefined, sftp));
+    });
+    return { sftp: sftpOpen } as unknown as Conn;
   }
 
   it("mkdirs ancestors, writes tmp, chmods, then renames into place", async () => {
@@ -527,6 +530,52 @@ describe("sftpWrite", () => {
       sftpWrite(connWithSftp(sftp), "/etc/shadow", "nope"),
     ).rejects.toThrow("Permission denied");
     expect(sftp.rename).not.toHaveBeenCalled();
+  });
+
+  it("names the remote path in a thrown error — never a bare, unattributed message", async () => {
+    const sftp = makeSftp();
+    sftp.writeFile.mockImplementation(
+      (_p: string, _d: string | Buffer, cb: (err: Error | null) => void) =>
+        queueMicrotask(() => cb(new Error("Failure"))),
+    );
+    await expect(
+      sftpWrite(connWithSftp(sftp), "/opt/db-instances/sb_ed4f/volumes/db/jwt.sql", "x"),
+    ).rejects.toThrow("/opt/db-instances/sb_ed4f/volumes/db/jwt.sql");
+  });
+
+  it("reuses one SFTP channel across multiple writes on the same connection", async () => {
+    // Regression: opening a fresh SFTP channel per file exhausted OpenSSH's
+    // default MaxSessions (10) once uploads grew past ~10 files, surfacing as
+    // an unattributed "Failure" on whichever write came next.
+    const sftp = makeSftp();
+    const conn = connWithSftp(sftp);
+
+    await sftpWrite(conn, "/opt/app/volumes/db/one.sql", "1");
+    await sftpWrite(conn, "/opt/app/volumes/db/two.sql", "2");
+    await sftpWrite(conn, "/opt/app/volumes/api/three.yml", "3");
+
+    expect(conn.sftp).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens a fresh channel if the cached one closes", async () => {
+    const first = makeSftp();
+    const conn = connWithSftp(first);
+    await sftpWrite(conn, "/opt/app/a", "a");
+    expect(conn.sftp).toHaveBeenCalledTimes(1);
+
+    // Server-side channel close (e.g. idle timeout) — the cache must not
+    // keep handing back a dead handle.
+    first.emit("close");
+
+    const second = makeSftp();
+    (conn.sftp as ReturnType<typeof vi.fn>).mockImplementation(
+      (cb: (err: Error | undefined, s: unknown) => void) =>
+        queueMicrotask(() => cb(undefined, second)),
+    );
+    await sftpWrite(conn, "/opt/app/b", "b");
+
+    expect(conn.sftp).toHaveBeenCalledTimes(2);
+    expect(second.calls.some((c) => c.startsWith("writeFile:/opt/app/b"))).toBe(true);
   });
 });
 

@@ -181,6 +181,15 @@ describe("startProvision — happy path", () => {
     for (const f of ["volumes/db/jwt.sql", "volumes/db/roles.sql", "volumes/api/kong.yml"]) {
       expect(uploaded.some((p) => p.endsWith(f))).toBe(true);
     }
+    // .gitkeep placeholders must never go through sftpWrite (untested
+    // zero-byte edge case) — the three empty dirs are created via a single
+    // batched `mkdir -p` exec call instead.
+    expect(uploaded.some((p) => p.endsWith(".gitkeep"))).toBe(false);
+    const mkdirCall = execMock.mock.calls.find((c) => String(c[1]).startsWith("mkdir -p"));
+    expect(mkdirCall).toBeTruthy();
+    for (const dir of ["volumes/storage", "volumes/snippets", "volumes/functions"]) {
+      expect(String(mkdirCall![1])).toContain(dir);
+    }
 
     // Secrets sealed (Uint8Array), status running.
     const final = instanceUpdate.mock.calls

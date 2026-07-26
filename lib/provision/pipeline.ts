@@ -23,6 +23,7 @@
  * remote files deliberately LEFT IN PLACE for inspection, and never an
  * automatic retry — the operator chooses Retry (idempotent `up -d`) or Remove.
  */
+import path from "node:path";
 import { ensureServerPrepared } from "@/lib/bootstrap/prepare";
 import type { EmitFn } from "@/lib/bootstrap/steps";
 import { sealBytes } from "@/lib/servers/seal-bytes";
@@ -214,18 +215,47 @@ async function runPipeline(
         // once and uploaded verbatim on every provision/retry. Without them
         // `db`'s bind-mount sources are missing and it never becomes healthy,
         // which blocks every service that depends on it.
+        //
+        // `.gitkeep` placeholders (storage/snippets/functions — empty
+        // directories the compose file bind-mounts) are handled separately
+        // via a single `mkdir -p`: an SFTP write of zero-length content is an
+        // untested edge case worth avoiding outright, and it collapses three
+        // round-trips into one.
         const staticFiles = await loadStaticVolumeFiles();
+        const emptyDirs = new Set<string>();
+        let uploaded = 0;
         for (const file of staticFiles) {
+          if (path.posix.basename(file.relPath) === ".gitkeep") {
+            emptyDirs.add(path.posix.dirname(file.relPath));
+            continue;
+          }
           await sftpWrite(
             conn,
             `${row.remotePath}/volumes/${file.relPath}`,
             file.content,
             0o644,
           );
+          uploaded += 1;
+          emit("info", `uploaded volumes/${file.relPath}`);
+        }
+        if (emptyDirs.size > 0) {
+          const dirs = [...emptyDirs].map(
+            (d) => `${row.remotePath}/volumes/${d}`,
+          );
+          const res = await exec(
+            conn,
+            `mkdir -p ${dirs.map((d) => `'${d}'`).join(" ")}`,
+          );
+          if (res.code !== 0) {
+            throw new Error(
+              `mkdir -p for empty volume dirs failed (code ${res.code}): ${res.stderr.trim()}`,
+            );
+          }
+          emit("info", `created ${dirs.length} empty volume dir(s)`);
         }
         emit(
           "info",
-          `uploaded docker-compose.yml + .env + ${staticFiles.length} support file(s) to ${row.remotePath}`,
+          `uploaded docker-compose.yml + .env + ${uploaded} support file(s) to ${row.remotePath}`,
         );
       });
 

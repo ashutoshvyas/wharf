@@ -237,13 +237,44 @@ export function exec(
   });
 }
 
+/**
+ * SFTP subsystem channels are cached per connection (WeakMap keyed on the
+ * ssh2 Client), not opened fresh per call.
+ *
+ * Bug this fixes: a provisioning run that uploads N files used to open N
+ * separate SFTP channels in sequence. OpenSSH's default `MaxSessions 10`
+ * counts subsystem channels the same as shell/exec sessions, so once a
+ * single provisioning phase started uploading more than ~10 files (it grew
+ * from 2 to 14 when the Postgres/Kong support files were added), later
+ * opens were refused by the server — surfacing as a bare, unhelpful
+ * "Failure" with no indication that channel exhaustion was the cause.
+ * Reusing one channel for the whole withConnection() session removes the
+ * ceiling entirely.
+ */
+const sftpCache = new WeakMap<Client, Promise<SFTPWrapper>>();
+
 function getSftp(conn: Client): Promise<SFTPWrapper> {
-  return new Promise((resolve, reject) => {
+  const cached = sftpCache.get(conn);
+  if (cached) return cached;
+
+  const promise = new Promise<SFTPWrapper>((resolve, reject) => {
     conn.sftp((err: Error | undefined, sftp: SFTPWrapper) => {
-      if (err) reject(err);
-      else resolve(sftp);
+      if (err) {
+        sftpCache.delete(conn);
+        reject(err);
+        return;
+      }
+      // The channel can outlive its usefulness (server-side close, protocol
+      // error) independently of the parent connection — drop it from the
+      // cache so the next call opens a fresh one instead of reusing a dead
+      // handle forever.
+      sftp.once("close", () => sftpCache.delete(conn));
+      sftp.once("error", () => sftpCache.delete(conn));
+      resolve(sftp);
     });
   });
+  sftpCache.set(conn, promise);
+  return promise;
 }
 
 function sftpCall(
@@ -278,18 +309,27 @@ export async function sftpWrite(
   content: string | Buffer,
   mode = 0o600,
 ): Promise<void> {
-  const sftp = await getSftp(conn);
-  for (const dir of ancestorDirs(remotePath)) {
-    // mkdir -p style: an already-existing directory surfaces as a generic
-    // SFTP failure — ignore it; if a dir is genuinely missing the write
-    // below fails loudly.
-    await sftpCall((cb) => sftp.mkdir(dir, cb)).catch(() => {});
+  try {
+    const sftp = await getSftp(conn);
+    for (const dir of ancestorDirs(remotePath)) {
+      // mkdir -p style: an already-existing directory surfaces as a generic
+      // SFTP failure — ignore it; if a dir is genuinely missing the write
+      // below fails loudly.
+      await sftpCall((cb) => sftp.mkdir(dir, cb)).catch(() => {});
+    }
+    const tmpPath = `${remotePath}.tmp-wharf`;
+    await sftpCall((cb) => sftp.writeFile(tmpPath, content, cb));
+    await sftpCall((cb) => sftp.chmod(tmpPath, mode, cb));
+    await sftpCall((cb) => sftp.unlink(remotePath, cb)).catch(() => {});
+    await sftpCall((cb) => sftp.rename(tmpPath, remotePath, cb));
+  } catch (err) {
+    // ssh2's SFTP errors are frequently a bare, generic "Failure" (the
+    // literal text of SSH_FX_FAILURE) with no indication of which operation
+    // or path was involved — naming the remote path here is the difference
+    // between an actionable log line and a one-word dead end.
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`sftpWrite ${remotePath}: ${msg}`);
   }
-  const tmpPath = `${remotePath}.tmp-wharf`;
-  await sftpCall((cb) => sftp.writeFile(tmpPath, content, cb));
-  await sftpCall((cb) => sftp.chmod(tmpPath, mode, cb));
-  await sftpCall((cb) => sftp.unlink(remotePath, cb)).catch(() => {});
-  await sftpCall((cb) => sftp.rename(tmpPath, remotePath, cb));
 }
 
 /**
