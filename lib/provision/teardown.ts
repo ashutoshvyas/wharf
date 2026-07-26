@@ -191,13 +191,27 @@ async function runTeardown(
         where: { dbInstanceId: row.id },
         data: { dbInstanceId: null },
       });
+      // `slug` carries a hard DB-level unique constraint independent of
+      // deletedAt (contract §7 — subdomains stay reserved across the whole
+      // grace period, even once purged, so a stale cache/DNS entry can never
+      // point at a *different* instance's data). Left unchanged, that
+      // constraint would keep the original slug permanently unavailable,
+      // since nothing else ever clears it. Renaming it here — the moment the
+      // real subdomain stops existing — immediately frees the human-facing
+      // name for reuse while the soft-deleted row (and its audit trail)
+      // still exists under this new value for the rest of the grace period.
+      const retiredSlug = `${row.slug}__removed-${Date.now()}`;
       await prisma.dbInstance.update({
         where: { id: row.id },
-        data: { deletedAt: new Date(), lastActionLog: tail.text() },
+        data: {
+          deletedAt: new Date(),
+          lastActionLog: tail.text(),
+          slug: retiredSlug,
+        },
       });
       emit(
         "info",
-        `soft-deleted metadata row; unlinked ${unlinked?.count ?? 0} website(s)`,
+        `soft-deleted metadata row (slug retired as ${retiredSlug}); unlinked ${unlinked?.count ?? 0} website(s)`,
       );
     });
 
@@ -208,6 +222,9 @@ async function runTeardown(
       targetType: "db_instance",
       targetId: row.id,
       metadata: {
+        // The original human-facing slug, since the row's own `slug` column
+        // is retired (mangled) as part of this same removal — see above.
+        slug: row.slug,
         project: row.composeProjectName,
         server: row.serverId,
         volumesRemoved: volumesRemoved.length,

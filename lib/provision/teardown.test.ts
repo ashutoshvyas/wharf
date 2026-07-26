@@ -36,6 +36,7 @@ const ok = (stdout = "") => ({ code: 0, stdout, stderr: "" });
 const ROW = {
   id: "inst-1",
   name: "clienta-prod",
+  slug: "clienta",
   serverId: "srv-1",
   composeProjectName: "sb_4f2a",
   remotePath: "/opt/db-instances/sb_4f2a",
@@ -145,6 +146,27 @@ describe("startRemove (teardown job)", () => {
       expect.objectContaining({ action: "instance.remove" }),
     );
     expect(serverLockHolder("srv-1")).toBeNull();
+
+    // Bugfix regression: `slug` carries a hard DB-level unique constraint
+    // independent of deletedAt, so leaving it unchanged would keep "clienta"
+    // permanently unavailable (nothing else ever clears it). The soft-delete
+    // must retire it to a new value so the human-facing name is immediately
+    // reusable by a fresh provision.
+    const data = softDelete![0] as { data: { slug?: string } };
+    expect(data.data.slug).toBeTruthy();
+    expect(data.data.slug).not.toBe("clienta");
+    expect(data.data.slug).toMatch(/^clienta__removed-\d+$/);
+  });
+
+  it("preserves the original slug in the audit trail after retiring it", async () => {
+    await startRemove("inst-1", CTX);
+    await watchJob(removeJobId("inst-1"));
+    expect(auditMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "instance.remove",
+        metadata: expect.objectContaining({ slug: "clienta" }),
+      }),
+    );
   });
 
   it("never issues rm when the stored path is tampered", async () => {
