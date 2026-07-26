@@ -43,6 +43,8 @@ const ROW = {
   status: "running",
 };
 
+const ROW_ERRORED = { ...ROW, status: "error" };
+
 /** Watch a job to completion, collecting its lines. */
 function watchJob(jobId: string) {
   return new Promise<{ status: string; lines: string[] }>((resolve) => {
@@ -210,5 +212,67 @@ describe("startRemove (teardown job)", () => {
     const res = await startRemove("inst-1", CTX);
     expect(res).toEqual({ busy: "provision" });
     release();
+  });
+
+  it("records forced:false in the audit trail for a normal removal", async () => {
+    await startRemove("inst-1", CTX);
+    await watchJob(removeJobId("inst-1"));
+    expect(auditMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "instance.remove",
+        metadata: expect.objectContaining({ forced: false }),
+      }),
+    );
+  });
+});
+
+describe("startRemove — force (unreachable-server escape hatch)", () => {
+  it("refuses force on anything but an errored instance", async () => {
+    const res = await startRemove("inst-1", CTX, { force: true });
+    expect(res).toEqual({
+      invalid: expect.stringContaining("only available for instances in 'error' status"),
+    });
+    // Must not have started a job or touched the row at all.
+    expect(instanceUpdate).not.toHaveBeenCalled();
+    expect(withConnectionMock).not.toHaveBeenCalled();
+  });
+
+  it("skips SSH entirely and soft-deletes when forced on an errored instance", async () => {
+    instanceFindUnique.mockResolvedValue({ ...ROW_ERRORED });
+
+    const res = await startRemove("inst-1", CTX, { force: true });
+    expect(res).toHaveProperty("jobId");
+    const { status, lines } = await watchJob(removeJobId("inst-1"));
+    expect(status).toBe("ok");
+
+    // No SSH connection was ever attempted.
+    expect(withConnectionMock).not.toHaveBeenCalled();
+    expect(execMock).not.toHaveBeenCalled();
+    expect(lines.some((l) => l.includes("force remove"))).toBe(true);
+
+    // Only the metadata phase ran — stop/volumes/files never did.
+    expect(lines.some((l) => l.includes("› metadata"))).toBe(true);
+    expect(lines.some((l) => l.includes("✓ metadata"))).toBe(true);
+    for (const phase of ["stop", "volumes", "files"]) {
+      expect(lines.some((l) => l.includes(`› ${phase}`))).toBe(false);
+    }
+
+    const softDelete = instanceUpdate.mock.calls.find(
+      (c) => (c[0] as { data?: { deletedAt?: unknown } })?.data?.deletedAt != null,
+    );
+    expect(softDelete).toBeTruthy();
+    expect(auditMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "instance.remove",
+        metadata: expect.objectContaining({ forced: true }),
+      }),
+    );
+  });
+
+  it("still holds and releases the per-server lock during a forced removal", async () => {
+    instanceFindUnique.mockResolvedValue({ ...ROW_ERRORED });
+    await startRemove("inst-1", CTX, { force: true });
+    await watchJob(removeJobId("inst-1"));
+    expect(serverLockHolder("srv-1")).toBeNull();
   });
 });

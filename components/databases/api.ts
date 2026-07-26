@@ -174,14 +174,19 @@ export async function retryInstance(id: string): Promise<JobAcceptedDto> {
   });
 }
 
-/** `confirmName` must equal the instance name, else 400 → 202 {jobId}. */
+/**
+ * `confirmName` must equal the instance name, else 400 → 202 {jobId}.
+ * `force` skips remote cleanup entirely (only valid from `error` status,
+ * else 409) — for an instance whose server can never be reached.
+ */
 export async function removeInstance(
   id: string,
   confirmName: string,
+  force?: boolean,
 ): Promise<JobAcceptedDto> {
   return apiFetch<JobAcceptedDto>(
     `/api/db-instances/${id}`,
-    jsonInit("DELETE", { confirmName }),
+    jsonInit("DELETE", { confirmName, ...(force ? { force: true } : {}) }),
   );
 }
 

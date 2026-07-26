@@ -30,9 +30,17 @@ export type CreateInstanceInput = z.infer<typeof createInstanceSchema>;
  * (architecture §4.3 "admin-only, type-the-name confirmation"). The value is
  * compared against the stored `name` in the route; the schema only enforces
  * that a string was supplied.
+ *
+ * `force`: skip the SSH-based cleanup phases entirely (stop/volumes/files)
+ * and only remove WHARF's own metadata row — for an instance whose server is
+ * permanently unreachable (bad/missing credentials, decommissioned box), the
+ * normal remove can never succeed since it requires connecting first. Only
+ * valid from `error` status (lib/provision/teardown.ts enforces this), and
+ * leaves anything that might exist on the remote server untouched.
  */
 export const removeSchema = z.object({
   confirmName: z.string().min(1, "confirmName is required"),
+  force: z.boolean().optional(),
 });
 
 export type RemoveInput = z.infer<typeof removeSchema>;

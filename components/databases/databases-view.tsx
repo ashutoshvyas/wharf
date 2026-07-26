@@ -57,6 +57,7 @@ export function DatabasesView({
   const [secretsFor, setSecretsFor] = useState<InstanceDto | null>(null);
   const [logFor, setLogFor] = useState<InstanceDto | null>(null);
   const [removeFor, setRemoveFor] = useState<InstanceDto | null>(null);
+  const [forceRemove, setForceRemove] = useState(false);
   const [progressFor, setProgressFor] = useState<InstanceDto | null>(null);
   /** Instance the new-instance modal is currently streaming. */
   const [modalProvisioningId, setModalProvisioningId] = useState<string | null>(null);
@@ -90,11 +91,12 @@ export function DatabasesView({
   });
 
   const remove = useMutation({
-    mutationFn: (instance: InstanceDto) => removeInstance(instance.id, instance.name),
-    onSuccess: (_data, instance) => {
+    mutationFn: (vars: { instance: InstanceDto; force: boolean }) =>
+      removeInstance(vars.instance.id, vars.instance.name, vars.force),
+    onSuccess: (_data, vars) => {
       void queryClient.invalidateQueries({ queryKey: INSTANCES_QUERY_KEY });
       setRemoveFor(null);
-      setProgressFor(instance);
+      setProgressFor(vars.instance);
     },
     onError: (err: Error) => {
       toast({ title: "Removal failed to start", message: err.message, variant: "danger" });
@@ -236,25 +238,43 @@ export function DatabasesView({
         onClose={() => setRemoveFor(null)}
         title="Remove permanently"
         variant="danger"
-        confirmLabel="Remove instance"
+        confirmLabel={forceRemove ? "Force remove" : "Remove instance"}
         typeToConfirm={removeFor?.name}
+        requireAck={
+          removeFor?.status === "error"
+            ? "Skip remote cleanup — this server can't be reached, so nothing there will be stopped or deleted. Only WHARF's own record is removed."
+            : undefined
+        }
+        onAckChange={setForceRemove}
         busy={remove.isPending}
         onConfirm={() => {
-          if (removeFor) remove.mutate(removeFor);
+          if (removeFor) remove.mutate({ instance: removeFor, force: forceRemove });
         }}
       >
-        <p>
-          Delete the containers and <b>all data volumes</b> for{" "}
-          <span className="font-mono text-[12.5px] text-ink">{removeFor?.name}</span>{" "}
-          on {removeFor?.server?.name ?? "its server"}.
-        </p>
-        <p className="mt-2">
-          The metadata record is soft-deleted and recoverable for a grace period
-          — <b className="text-danger">the database volumes are destroyed
-          immediately and permanently.</b>{" "}
-          That data cannot be recovered. Linked websites keep their record with
-          the database link cleared.
-        </p>
+        {forceRemove ? (
+          <p>
+            Remove WHARF&apos;s record of{" "}
+            <span className="font-mono text-[12.5px] text-ink">{removeFor?.name}</span>{" "}
+            <b className="text-danger">without connecting to its server.</b> Any
+            containers, volumes, or files that exist there are left exactly as
+            they are — use this only when the server is confirmed unreachable.
+          </p>
+        ) : (
+          <>
+            <p>
+              Delete the containers and <b>all data volumes</b> for{" "}
+              <span className="font-mono text-[12.5px] text-ink">{removeFor?.name}</span>{" "}
+              on {removeFor?.server?.name ?? "its server"}.
+            </p>
+            <p className="mt-2">
+              The metadata record is soft-deleted and recoverable for a grace period
+              — <b className="text-danger">the database volumes are destroyed
+              immediately and permanently.</b>{" "}
+              That data cannot be recovered. Linked websites keep their record with
+              the database link cleared.
+            </p>
+          </>
+        )}
       </ConfirmModal>
     </div>
   );

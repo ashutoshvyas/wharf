@@ -99,4 +99,10 @@ describe("removeSchema", () => {
     // the DELETE handler against the stored row.
     expect(removeSchema.safeParse({ confirmName: "not-the-name" }).success).toBe(true);
   });
+
+  it("force is optional and boolean-typed", () => {
+    expect(removeSchema.safeParse({ confirmName: "x", force: true }).success).toBe(true);
+    expect(removeSchema.safeParse({ confirmName: "x" }).success).toBe(true);
+    expect(removeSchema.safeParse({ confirmName: "x", force: "true" }).success).toBe(false);
+  });
 });

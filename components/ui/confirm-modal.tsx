@@ -13,6 +13,10 @@ export interface ConfirmModalProps {
   children?: ReactNode;
   /** Exact string the user must type before confirm enables (e.g. instance name). */
   typeToConfirm?: string;
+  /** Extra checkbox label the user must tick before confirm enables, alongside typeToConfirm. */
+  requireAck?: string;
+  /** Fires whenever the requireAck checkbox changes (including the reset on open/close). */
+  onAckChange?: (acked: boolean) => void;
   confirmLabel?: string;
   cancelLabel?: string;
   /** danger renders the warning icon + danger confirm button. */
@@ -28,6 +32,8 @@ export function ConfirmModal({
   title,
   children,
   typeToConfirm,
+  requireAck,
+  onAckChange,
   confirmLabel = "Confirm",
   cancelLabel = "Cancel",
   variant = "danger",
@@ -35,13 +41,21 @@ export function ConfirmModal({
   busy = false,
 }: ConfirmModalProps) {
   const [typed, setTyped] = useState("");
+  const [acked, setAcked] = useState(false);
 
-  // Reset the type-to-confirm input every time the modal opens.
+  // Reset the type-to-confirm input and ack checkbox every time the modal opens.
   useEffect(() => {
-    if (open) setTyped("");
+    if (open) {
+      setTyped("");
+      setAcked(false);
+      onAckChange?.(false);
+    }
+    // onAckChange is a per-render closure the caller doesn't memoize — only
+    // `open` should retrigger this reset.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  const matches = !typeToConfirm || typed === typeToConfirm;
+  const matches = (!typeToConfirm || typed === typeToConfirm) && (!requireAck || acked);
 
   return (
     <Dialog open={open} onClose={onClose} ariaLabel={title}>
@@ -78,6 +92,20 @@ export function ConfirmModal({
               className="h-10 w-full rounded-[6px] border border-neutral-200 bg-white px-3 font-mono text-[13px] text-ink transition-shadow focus:border-cobalt-400 focus:outline-none focus:ring-2 focus:ring-[rgba(92,120,227,0.25)]"
             />
           </div>
+        ) : null}
+        {requireAck ? (
+          <label className="mt-4 flex items-start gap-2.5 text-[13px] text-neutral-700">
+            <input
+              type="checkbox"
+              checked={acked}
+              onChange={(e) => {
+                setAcked(e.target.checked);
+                onAckChange?.(e.target.checked);
+              }}
+              className="mt-0.5 h-4 w-4 shrink-0 rounded-[3px] border-neutral-300 text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cobalt-400"
+            />
+            {requireAck}
+          </label>
         ) : null}
       </ModalBody>
       <ModalFoot>

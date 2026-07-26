@@ -54,19 +54,38 @@ export function assertSafeRemotePath(remotePath: string, project: string): strin
   return expected;
 }
 
-export type StartRemoveResult = { jobId: string } | { busy: string };
+export type StartRemoveResult = { jobId: string } | { busy: string } | { invalid: string };
 
 /**
  * Kick off a detached teardown job. The instance is flipped to `removing`
  * before the job starts so a concurrent reader never sees it as healthy.
+ *
+ * `force`: skip the SSH-based stop/volumes/files phases and only remove
+ * WHARF's own metadata — for an instance whose server can never be reached
+ * (bad/missing credentials, decommissioned box), since the normal path
+ * requires connecting before it can do anything at all. Restricted to
+ * instances already in `error` — a healthy instance always has a reachable
+ * server, so skipping cleanup there would abandon real running resources for
+ * no reason; `error` is exactly the state that means normal remove can't work.
  */
 export async function startRemove(
   instanceId: string,
   ctx: ProvisionCtx,
+  opts: { force?: boolean } = {},
 ): Promise<StartRemoveResult> {
   const instance = await prisma.dbInstance.findUnique({ where: { id: instanceId } });
   if (!instance || instance.deletedAt) {
     throw new Error(`Instance ${instanceId} was not found.`);
+  }
+
+  const force = opts.force ?? false;
+  if (force && instance.status !== "error") {
+    return {
+      invalid:
+        `Force remove is only available for instances in 'error' status ` +
+        `(this instance is '${instance.status}') — use the normal remove, ` +
+        "which cleans up remote resources.",
+    };
   }
 
   const release = tryAcquireServerLock(instance.serverId, "remove");
@@ -98,6 +117,7 @@ export async function startRemove(
     ctx,
     jobId,
     release,
+    force,
   );
   return { jobId };
 }
@@ -128,6 +148,7 @@ async function runTeardown(
   ctx: ProvisionCtx,
   jobId: string,
   release: () => void,
+  force: boolean,
 ): Promise<void> {
   const tail = new LogTail();
   const emit = makeEmitter(jobId, tail);
@@ -135,55 +156,65 @@ async function runTeardown(
   let volumesRemoved: string[] = [];
 
   try {
-    await withConnection(row.serverId, async (conn: SshConnection) => {
-      // ── stop: containers AND named volumes in one idempotent command ────
-      await runPhase(phaseOpts, "stop", async () => {
-        volumesRemoved = await listVolumes(conn, row.composeProjectName);
-        const res = await exec(
-          conn,
-          `docker compose -p ${row.composeProjectName} down -v`,
-          { timeoutMs: 180_000 },
-        );
-        if (res.code !== 0) {
-          throw new Error(
-            `docker compose down -v failed (code ${res.code}): ${res.stderr.trim()}`,
+    if (force) {
+      emit(
+        "info",
+        "force remove: no SSH connection is attempted — the stop/volumes/files " +
+          "phases are skipped entirely. Anything that exists on the remote " +
+          "server for this instance is left untouched; only WHARF's own " +
+          "metadata row is removed.",
+      );
+    } else {
+      await withConnection(row.serverId, async (conn: SshConnection) => {
+        // ── stop: containers AND named volumes in one idempotent command ──
+        await runPhase(phaseOpts, "stop", async () => {
+          volumesRemoved = await listVolumes(conn, row.composeProjectName);
+          const res = await exec(
+            conn,
+            `docker compose -p ${row.composeProjectName} down -v`,
+            { timeoutMs: 180_000 },
           );
-        }
-        emit("info", `stopped and removed containers for ${row.composeProjectName}`);
-      });
+          if (res.code !== 0) {
+            throw new Error(
+              `docker compose down -v failed (code ${res.code}): ${res.stderr.trim()}`,
+            );
+          }
+          emit("info", `stopped and removed containers for ${row.composeProjectName}`);
+        });
 
-      // ── volumes: prove the data is really gone ──────────────────────────
-      await runPhase(phaseOpts, "volumes", async () => {
-        let left = await listVolumes(conn, row.composeProjectName);
-        if (left.length > 0) {
-          emit("info", `still present after down -v, removing explicitly: ${left.join(", ")}`);
-          await exec(conn, `docker volume rm -f ${left.join(" ")}`, { timeoutMs: 60_000 });
-          left = await listVolumes(conn, row.composeProjectName);
-        }
-        if (left.length > 0) {
-          throw new Error(
-            `volumes still exist after removal: ${left.join(", ")} — something is still ` +
-              "using them. Remove them manually and retry.",
+        // ── volumes: prove the data is really gone ────────────────────────
+        await runPhase(phaseOpts, "volumes", async () => {
+          let left = await listVolumes(conn, row.composeProjectName);
+          if (left.length > 0) {
+            emit("info", `still present after down -v, removing explicitly: ${left.join(", ")}`);
+            await exec(conn, `docker volume rm -f ${left.join(" ")}`, { timeoutMs: 60_000 });
+            left = await listVolumes(conn, row.composeProjectName);
+          }
+          if (left.length > 0) {
+            throw new Error(
+              `volumes still exist after removal: ${left.join(", ")} — something is still ` +
+                "using them. Remove them manually and retry.",
+            );
+          }
+          emit(
+            "info",
+            volumesRemoved.length > 0
+              ? `removed ${volumesRemoved.length} volume(s): ${volumesRemoved.join(", ")}`
+              : "no named volumes found for this project",
           );
-        }
-        emit(
-          "info",
-          volumesRemoved.length > 0
-            ? `removed ${volumesRemoved.length} volume(s): ${volumesRemoved.join(", ")}`
-            : "no named volumes found for this project",
-        );
-      });
+        });
 
-      // ── files: the guarded rm -rf ───────────────────────────────────────
-      await runPhase(phaseOpts, "files", async () => {
-        const safePath = assertSafeRemotePath(row.remotePath, row.composeProjectName);
-        const res = await exec(conn, `rm -rf ${safePath}`, { timeoutMs: 60_000 });
-        if (res.code !== 0) {
-          throw new Error(`rm -rf ${safePath} failed (code ${res.code}): ${res.stderr.trim()}`);
-        }
-        emit("info", `deleted ${safePath}`);
+        // ── files: the guarded rm -rf ──────────────────────────────────────
+        await runPhase(phaseOpts, "files", async () => {
+          const safePath = assertSafeRemotePath(row.remotePath, row.composeProjectName);
+          const res = await exec(conn, `rm -rf ${safePath}`, { timeoutMs: 60_000 });
+          if (res.code !== 0) {
+            throw new Error(`rm -rf ${safePath} failed (code ${res.code}): ${res.stderr.trim()}`);
+          }
+          emit("info", `deleted ${safePath}`);
+        });
       });
-    });
+    }
 
     // ── metadata: soft delete + unlink websites ───────────────────────────
     await runPhase(phaseOpts, "metadata", async () => {
@@ -228,6 +259,7 @@ async function runTeardown(
         project: row.composeProjectName,
         server: row.serverId,
         volumesRemoved: volumesRemoved.length,
+        forced: force,
       },
     }).catch((auditErr: unknown) => {
       console.error("[teardown] failed to write audit row:", auditErr);
@@ -253,7 +285,7 @@ async function runTeardown(
       action: "instance.remove.failed",
       targetType: "db_instance",
       targetId: row.id,
-      metadata: { project: row.composeProjectName, error: message },
+      metadata: { project: row.composeProjectName, error: message, forced: force },
     }).catch((auditErr: unknown) => {
       console.error("[teardown] failed to write failure audit row:", auditErr);
     });

@@ -51,13 +51,15 @@ export const DELETE = withErrorHandling(
       return apiError(400, "Confirmation does not match the instance name");
     }
 
-    const result = await startRemove(id, {
-      userId: session.user.id,
-      userEmail: session.user.email,
-    });
+    const result = await startRemove(
+      id,
+      { userId: session.user.id, userEmail: session.user.email },
+      { force: body.force },
+    );
     if ("busy" in result) {
       return apiError(409, `Server is busy — a '${result.busy}' job is running.`);
     }
+    if ("invalid" in result) return apiError(409, result.invalid);
     return NextResponse.json({ jobId: result.jobId }, { status: 202 });
   },
 );
