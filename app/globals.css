@@ -1,0 +1,193 @@
+@import "tailwindcss";
+
+/*
+  WHARF — INITQUBE Brand & Design System v1.0
+  Cobalt leads. Coral sparks. Neutrals carry everything else.
+  Base 4px spacing rhythm · Figtree + JetBrains Mono
+  Tokens carried verbatim from app/globals.css,
+  extended with WHARF panel tokens (terminal bg, danger hover shade).
+*/
+
+@theme {
+  /* ---- Cobalt · Primary ---- */
+  --color-cobalt-50: #eef2fd;
+  --color-cobalt-100: #dbe3fb;
+  --color-cobalt-200: #b9c8f6;
+  --color-cobalt-300: #8ca3ef;
+  --color-cobalt-400: #5c78e3;
+  --color-cobalt-500: #2b54c7;
+  --color-cobalt-600: #2547ad;
+  --color-cobalt-700: #1f3b8f;
+  --color-cobalt-800: #1a3178;
+  --color-cobalt-900: #152c6b;
+  --color-ink: #152c6b;
+
+  /* ---- Coral · Accent (use for <=10% of any surface) ---- */
+  --color-coral-50: #fdefe9;
+  --color-coral-100: #fadccf;
+  --color-coral-200: #f6bda3;
+  --color-coral-300: #f29b76;
+  --color-coral-400: #ef8258;
+  --color-coral-500: #ec6b45;
+  --color-coral-600: #d4562f;
+  --color-coral-700: #b0431f;
+
+  /* ---- Neutral scale ---- */
+  --color-neutral-0: #ffffff;
+  --color-neutral-50: #f7f8fa;
+  --color-neutral-100: #eef0f4;
+  --color-neutral-200: #dfe3ea;
+  --color-neutral-300: #c5ccd8;
+  --color-neutral-400: #9aa4b6;
+  --color-neutral-500: #6b7488;
+  --color-neutral-600: #4a5262;
+  --color-neutral-700: #333a48;
+  --color-neutral-800: #1f2530;
+
+  /* ---- Semantic ---- */
+  --color-success: #2e9e6b;
+  --color-warning: #e7a63c;
+  --color-danger: #d8493c;
+  --color-danger-600: #c03e33;
+  --color-info: #2b7fc7;
+
+  /* ---- WHARF panel extensions ---- */
+  --color-terminal-bg: #0d1117;
+
+  /* ---- Type ---- */
+  --font-sans: var(--font-figtree), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains), ui-monospace, monospace;
+
+  /* ---- Radius (brand tokens: 6 / 12 / 16 / full) ---- */
+  --radius-sm: 6px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+
+  /* ---- Elevation ---- */
+  --shadow-sm: 0 1px 2px rgba(21, 44, 107, 0.06), 0 1px 3px rgba(21, 44, 107, 0.08);
+  --shadow-md: 0 6px 16px -4px rgba(21, 44, 107, 0.12), 0 2px 6px -2px rgba(21, 44, 107, 0.08);
+  --shadow-lg: 0 24px 48px -12px rgba(21, 44, 107, 0.22), 0 8px 20px -8px rgba(21, 44, 107, 0.14);
+  --shadow-glow: 0 0 0 1px rgba(43, 84, 199, 0.35), 0 12px 40px -8px rgba(43, 84, 199, 0.5);
+
+  /* ---- Motion (status dots, in-flight pulses) ---- */
+  --animate-spark: spark 2.8s ease-in-out infinite;
+  --animate-spark-fast: spark 1.3s ease-in-out infinite;
+}
+
+@layer base {
+  :root {
+    --background: #ffffff;
+    --foreground: #152c6b;
+  }
+
+  * {
+    border-color: var(--color-neutral-200);
+  }
+
+  html {
+    scroll-behavior: smooth;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    background: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    font-feature-settings: "ss01", "cv01";
+  }
+
+  ::selection {
+    background: var(--color-coral-500);
+    color: #fff;
+  }
+
+  /* Section label · tracked (from brand type spec) */
+  .label-track {
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 0.22em;
+    font-size: 0.72rem;
+    font-weight: 500;
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+  .text-pretty {
+    text-wrap: pretty;
+  }
+
+  /* Cobalt->coral emphasis gradient text with slow sheen */
+  .text-gradient {
+    background: linear-gradient(
+      100deg,
+      #5c78e3 0%,
+      #2b54c7 30%,
+      #ec6b45 55%,
+      #2b54c7 80%,
+      #5c78e3 100%
+    );
+    background-size: 220% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    animation: sheen 8s ease-in-out infinite;
+  }
+
+  /* Subtle grid backdrop for dark sections */
+  .bg-grid {
+    background-image:
+      linear-gradient(to right, rgba(255, 255, 255, 0.05) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(255, 255, 255, 0.05) 1px, transparent 1px);
+    background-size: 64px 64px;
+  }
+  .bg-grid-ink {
+    background-image:
+      linear-gradient(to right, rgba(21, 44, 107, 0.06) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(21, 44, 107, 0.06) 1px, transparent 1px);
+    background-size: 48px 48px;
+  }
+
+  /* Status tints (StatusBadge / alerts backgrounds) */
+  .bg-tint-success {
+    background-color: rgba(46, 158, 107, 0.1);
+  }
+  .bg-tint-warning {
+    background-color: rgba(231, 166, 60, 0.12);
+  }
+  .bg-tint-danger {
+    background-color: rgba(216, 73, 60, 0.09);
+  }
+  .bg-tint-info {
+    background-color: rgba(43, 127, 199, 0.07);
+  }
+}
+
+/* Animated gradient sheen (background-clip text) */
+@keyframes sheen {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+}
+
+/* Coral spark pulse */
+@keyframes spark {
+  0%, 100% { opacity: 0.85; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.06); }
+}
+.animate-spark {
+  animation: spark 2.8s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}

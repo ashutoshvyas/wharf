@@ -1,0 +1,22 @@
+# WHARF-managed Traefik — deployed by bootstrap to
+# /opt/wharf/traefik/docker-compose.yml and run as compose project
+# `wharf-traefik`. Do not edit on the server; re-running bootstrap
+# re-uploads this file (architecture §4.1 step 3).
+services:
+  traefik:
+    image: traefik:v3.1
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./dynamic:/etc/traefik/dynamic:ro
+      - ./acme.json:/acme.json
+    networks:
+      - traefik
+
+networks:
+  traefik:
+    external: true

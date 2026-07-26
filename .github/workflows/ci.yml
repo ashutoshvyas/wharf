@@ -1,0 +1,114 @@
+# WHARF CI: lint, typecheck, test, build — required to merge.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  credentials:
+    name: Credential scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install verified Gitleaks binary
+        run: |
+          version=8.30.1
+          archive="gitleaks_${version}_linux_x64.tar.gz"
+          base="https://github.com/gitleaks/gitleaks/releases/download/v${version}"
+          curl --fail --location --silent --show-error "$base/$archive" -o "$RUNNER_TEMP/$archive"
+          curl --fail --location --silent --show-error "$base/gitleaks_${version}_checksums.txt" -o "$RUNNER_TEMP/gitleaks-checksums.txt"
+          cd "$RUNNER_TEMP"
+          awk -v file="$archive" '$2 == file' gitleaks-checksums.txt | sha256sum --check --strict
+          tar -xzf "$archive" gitleaks
+          ./gitleaks version
+      - name: Scan reachable history for credentials
+        run: '"$RUNNER_TEMP/gitleaks" git --redact --log-opts=--all'
+
+  ci:
+    needs: credentials
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: wharf
+          POSTGRES_PASSWORD: wharf
+          POSTGRES_DB: wharf
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U wharf"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://wharf:wharf@localhost:5432/wharf
+      # schema.prisma requires DIRECT_URL for migrations (pgbouncer can't run
+      # them in production); CI's ephemeral single-container Postgres has no
+      # pooler distinction, so the same connection string is both.
+      DIRECT_URL: postgresql://wharf:wharf@localhost:5432/wharf
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Generate ephemeral test credentials
+        run: |
+          for key in NEXTAUTH_SECRET WHARF_MASTER_KEY ADMIN_PASSWORD; do
+            value="$(openssl rand -base64 32)"
+            printf '::add-mask::%s\n' "$value"
+            printf '%s=%s\n' "$key" "$value" >> "$GITHUB_ENV"
+          done
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx prisma generate
+        if: hashFiles('prisma/schema.prisma') != ''
+      - run: npx prisma migrate deploy
+        if: hashFiles('prisma/migrations/**') != ''
+      - run: npm run lint
+      - run: npx tsx scripts/check-secret-logging.ts
+      - name: npm audit (fails only on a real finding, not a registry hiccup)
+        run: |
+          set +e
+          OUTPUT="$(npm audit --omit=dev --audit-level=critical --json)"
+          CODE=$?
+          set -e
+          if [ "$CODE" -eq 0 ]; then
+            echo "npm audit: no critical vulnerabilities."
+            exit 0
+          fi
+          # A genuine result carries .metadata.vulnerabilities; npmjs.org's
+          # audit endpoint (mid-migration to its "bulk" replacement per its own
+          # deprecation notice) sometimes returns a transport-error shape
+          # instead ({"message":...,"error":...}) with no vulnerability data
+          # at all. Only the former should ever block CI.
+          if echo "$OUTPUT" | jq -e '.metadata.vulnerabilities' >/dev/null 2>&1; then
+            echo "$OUTPUT"
+            echo "npm audit found a vulnerability at or above the critical threshold."
+            exit 1
+          fi
+          echo "npm audit endpoint returned a transport error (no vulnerability data) — treating as inconclusive, not a failure:"
+          echo "$OUTPUT"
+      - run: npm run typecheck
+      - run: npm run typecheck -w gateway
+      - run: npm test
+      - run: npm run build
+      - run: npm run build -w gateway
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+      - name: E2E
+        run: npm run test:e2e
+        env:
+          NEXTAUTH_URL: http://127.0.0.1:3210
+          PANEL_URL: http://127.0.0.1:3210
+          ADMIN_EMAIL: ci-admin@example.test

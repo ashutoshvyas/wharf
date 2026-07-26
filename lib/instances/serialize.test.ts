@@ -1,0 +1,140 @@
+/**
+ * the instance DTO is the contract a UI agent codes against
+ * (docs/provisioning-contract.md §1). These tests pin the allowlist: exact
+ * key set, ISO date strings, and — the security-critical one — that no
+ * ciphertext column or secret value can leak through the serializer even when
+ * the row carries all four of them.
+ */
+import { describe, expect, it } from "vitest";
+import type { DbInstance } from "@prisma/client";
+import {
+  INSTANCE_INCLUDE,
+  serializeInstance,
+  type DbInstanceRecord,
+} from "./serialize";
+
+/** A fully-populated row, every nullable field set and every secret sealed. */
+function fullRow(): DbInstance & { server: { id: string; name: string } } {
+  return {
+    id: "inst-1",
+    serverId: "srv-1",
+    name: "clienta-prod",
+    slug: "clienta",
+    composeProjectName: "sb_4f2a",
+    remotePath: "/opt/db-instances/sb_4f2a",
+    apiSubdomain: "clienta.wharf.example.com",
+    studioSubdomain: "studio-clienta.wharf.example.com",
+    pgPasswordEnc: Buffer.from("sealed-pg-password"),
+    anonKeyEnc: Buffer.from("sealed-anon-key"),
+    serviceRoleKeyEnc: Buffer.from("sealed-service-role-key"),
+    jwtSecretEnc: Buffer.from("sealed-jwt-secret"),
+    status: "running",
+    lastActionLog: "✓ health",
+    healthCheckedAt: new Date("2026-07-24T18:00:00.000Z"),
+    deletedAt: null,
+    createdAt: new Date("2026-07-24T17:55:00.000Z"),
+    updatedAt: new Date("2026-07-24T18:00:00.000Z"),
+    server: { id: "srv-1", name: "db-01" },
+  };
+}
+
+const CONTRACT_KEYS = [
+  "id",
+  "name",
+  "slug",
+  "serverId",
+  "server",
+  "composeProjectName",
+  "remotePath",
+  "apiSubdomain",
+  "studioSubdomain",
+  "status",
+  "lastActionLog",
+  "healthCheckedAt",
+  "createdAt",
+  "updatedAt",
+];
+
+describe("serializeInstance", () => {
+  it("emits zero encrypted/secret keys for a fully-populated row", () => {
+    const out = serializeInstance(fullRow());
+    for (const key of Object.keys(out)) {
+      expect(key).not.toMatch(/enc$/i);
+      expect(key).not.toMatch(/password|key|secret|token/i);
+    }
+    const json = JSON.stringify(out);
+    expect(json).not.toContain("sealed-");
+    expect(json).not.toContain("Enc");
+  });
+
+  it("never leaks a secret value even when the row is deeply inspected", () => {
+    const out = serializeInstance(fullRow()) as unknown as Record<string, unknown>;
+    for (const field of [
+      "pgPasswordEnc",
+      "anonKeyEnc",
+      "serviceRoleKeyEnc",
+      "jwtSecretEnc",
+    ]) {
+      expect(out[field]).toBeUndefined();
+    }
+    // deletedAt is filtered upstream and deliberately not part of the wire shape.
+    expect(out.deletedAt).toBeUndefined();
+  });
+
+  it("exposes exactly the contract §1 fields", () => {
+    const out = serializeInstance(fullRow());
+    expect(Object.keys(out).sort()).toEqual([...CONTRACT_KEYS].sort());
+  });
+
+  it("formats every date as an ISO-8601 string", () => {
+    const out = serializeInstance(fullRow());
+    expect(out.createdAt).toBe("2026-07-24T17:55:00.000Z");
+    expect(out.updatedAt).toBe("2026-07-24T18:00:00.000Z");
+    expect(out.healthCheckedAt).toBe("2026-07-24T18:00:00.000Z");
+  });
+
+  it("passes nullable fields through as null", () => {
+    const out = serializeInstance({
+      ...fullRow(),
+      lastActionLog: null,
+      healthCheckedAt: null,
+    });
+    expect(out.lastActionLog).toBeNull();
+    expect(out.healthCheckedAt).toBeNull();
+  });
+
+  it("omits `server` when the relation was not included", () => {
+    const { server: _drop, ...row } = fullRow();
+    void _drop;
+    const out = serializeInstance(row as DbInstanceRecord);
+    expect("server" in out).toBe(false);
+    expect(out.serverId).toBe("srv-1");
+  });
+
+  it("embeds only id+name for an included server", () => {
+    const out = serializeInstance({
+      ...fullRow(),
+      // Extra relation fields must not survive the allowlist.
+      server: { id: "srv-1", name: "db-01", host: "10.0.0.1" },
+    } as DbInstanceRecord);
+    expect(out.server).toEqual({ id: "srv-1", name: "db-01" });
+  });
+
+  it("preserves the status verbatim (only the engine writes it)", () => {
+    for (const status of ["provisioning", "running", "stopped", "error", "removing"]) {
+      expect(serializeInstance({ ...fullRow(), status }).status).toBe(status);
+    }
+  });
+});
+
+describe("INSTANCE_INCLUDE", () => {
+  it("selects only the id and name of the related server", () => {
+    expect(INSTANCE_INCLUDE).toEqual({
+      server: { select: { id: true, name: true } },
+    });
+  });
+
+  it("never selects an encrypted column", () => {
+    expect(JSON.stringify(INSTANCE_INCLUDE)).not.toMatch(/enc/i);
+  });
+});

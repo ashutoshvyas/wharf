@@ -1,0 +1,90 @@
+# WHARF panel (Next.js).
+#
+# Install: cp deploy/systemd/wharf-panel.service /etc/systemd/system/
+#          systemctl daemon-reload && systemctl enable --now wharf-panel
+#
+# The panel is a LONG-RUNNING node process, not serverless: provisioning jobs
+# hold an SSH session for minutes at a time (architecture §2/§4.3). Never run
+# it behind anything that recycles the process between requests.
+
+[Unit]
+Description=WHARF panel (Next.js standalone server)
+Documentation=file:/opt/wharf/docs/deployment.md
+# network-online.target needs BOTH Wants= and After= — After= alone never
+# pulls the unit in, so the panel would start before DNS/routes are up and
+# fail its first connection to the Supabase Postgres.
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=wharf
+Group=wharf
+WorkingDirectory=/opt/wharf
+
+# Bind to loopback only: TLS and the public listener belong to the reverse
+# proxy (deploy/Caddyfile). Declared BEFORE EnvironmentFile so an operator can
+# still override PORT/HOSTNAME in /etc/wharf/.env if 3000 is taken.
+Environment=NODE_ENV=production
+Environment=PORT=3000
+Environment=HOSTNAME=127.0.0.1
+
+# Every secret lives here, mode 0600, owned by wharf:wharf. systemd reads it
+# as PID 1 before the sandbox below is applied, so ProtectSystem/ProtectHome
+# do not interfere. Never commit these values; never put a .env in /opt/wharf
+# (see deploy/README.md — `next build` copies repo .env files into the
+# standalone output).
+EnvironmentFile=/etc/wharf/.env
+
+# next.config.ts sets output:"standalone" — the entry point is the generated
+# server.js, NOT `next start`. server.js chdir()s to its own directory, so
+# .next/static and public/ must have been copied into .next/standalone first
+# (deploy/deploy.sh does this; `next build` does NOT).
+ExecStart=/usr/bin/node .next/standalone/server.js
+
+Restart=on-failure
+RestartSec=5
+# Give a stuck provisioning job time to finish its SSH teardown on stop.
+TimeoutStopSec=30
+KillSignal=SIGTERM
+
+# ---- logging ----
+# Everything goes to journald: journalctl -u wharf-panel -f
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=wharf-panel
+
+# ---- hardening ----
+# The panel never needs to gain privilege; setuid/setgid binaries in the tree
+# become inert. Also a prerequisite for several directives below.
+NoNewPrivileges=yes
+# Private /tmp namespace — temp files (none expected) cannot be seen or
+# tampered with by other services, and are destroyed on stop.
+PrivateTmp=yes
+# Whole filesystem hierarchy read-only except /dev, /proc, /sys.
+ProtectSystem=strict
+# ...with one exception: the Next standalone server writes its fetch/ISR cache
+# under <standalone>/.next/cache. Nothing else in /opt/wharf is written at
+# runtime — deploys write it while the unit is stopped/restarting, as root.
+ReadWritePaths=/opt/wharf/.next/standalone/.next
+# /home, /root and /run/user are invisible. The service user has no home it
+# needs; SSH keys for managed servers come from the database, encrypted, never
+# from ~/.ssh.
+ProtectHome=yes
+# Kernel knobs, cgroup hierarchy and kernel logs are not writable/readable.
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+ProtectKernelLogs=yes
+# The unit cannot change the system clock or create setuid files.
+ProtectClock=yes
+RestrictSUIDSGID=yes
+# Only IP sockets are needed (HTTP listener + outbound SSH/Postgres/HTTPS).
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+# NOTE — deliberately NOT set:
+#   MemoryDenyWriteExecute=yes  → breaks the V8 JIT; node will not start.
+#   PrivateNetwork=yes          → the panel's entire job is outbound SSH.
+#   ProtectProc / ProcSubset    → safe here, but they hide nothing an attacker
+#                                 running as `wharf` could not already reach.
+
+[Install]
+WantedBy=multi-user.target

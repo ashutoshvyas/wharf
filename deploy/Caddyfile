@@ -1,0 +1,121 @@
+# WHARF reverse proxy — Caddy.
+#
+# Install:  cp deploy/Caddyfile /etc/caddy/Caddyfile
+#           # replace panel.example.com with your PANEL_URL host
+#           caddy validate --config /etc/caddy/Caddyfile
+#           systemctl reload caddy
+#
+# This proxies the PANEL VPS only. Managed servers are fronted by their own
+# Traefik, installed by WHARF's bootstrap — nothing here touches them.
+#
+# The hostname must match PANEL_URL / NEXTAUTH_URL in /etc/wharf/.env and must
+# sit under COOKIE_DOMAIN, or Studio SSO breaks silently
+# (docs/deployment.md — "Domains and the Studio SSO chain").
+#
+# Prefer an env var? Caddy expands {$VAR} from *Caddy's own* environment, not
+# from /etc/wharf/.env. To use {$WHARF_PANEL_HOST} below, add
+#   [Service]
+#   Environment=WHARF_PANEL_HOST=panel.example.com
+# to a `systemctl edit caddy` drop-in. Otherwise keep the literal host.
+
+panel.example.com {
+	# Automatic TLS: Caddy solves an ACME HTTP-01/TLS-ALPN challenge on first
+	# request and renews unattended. Requirements: this host's A record points
+	# at the panel VPS, and ports 80 and 443 are open inbound.
+	# Set your address for expiry notices (or use the global `email` option):
+	#   tls you@example.com
+	# Caddy's LE account is separate from LETSENCRYPT_EMAIL in .env — that one
+	# is for Traefik on the DATABASE servers, not for this proxy.
+
+	encode zstd gzip
+
+	# ---- Terminal Gateway ------------------------------------------------
+	# The browser opens wss://panel.example.com/ws/terminal/<serverId>.
+	# `handle` (not `handle_path`) is deliberate: it does NOT strip the prefix,
+	# and gateway/src/auth.ts routes on the full path /ws/terminal/:serverId.
+	#
+	# WebSockets need no special configuration in Caddy v2 — reverse_proxy
+	# detects the Upgrade handshake and switches to a raw bidirectional stream
+	# with no read timeout. There is no equivalent of nginx's
+	# proxy_set_header Upgrade / proxy_read_timeout to write here.
+	handle /ws/* {
+		reverse_proxy 127.0.0.1:3001
+	}
+
+	# ---- Traefik forwardAuth gate -----------------------------------------
+	# Traefik (on each database server) calls this endpoint with its own
+	# X-Forwarded-Host/-Uri describing the ORIGINAL studio-*.domain request —
+	# that's how the panel knows what to bounce the user back to after login
+	# (see app/api/auth/verify/route.ts). Caddy's reverse_proxy overwrites
+	# X-Forwarded-Host with its own idea of the current Host by default (to
+	# stop a client spoofing it) — which for THIS route is exactly the value
+	# we need to NOT overwrite, since the "client" making this particular
+	# request is Traefik, relaying details about someone else's request.
+	# Left at the default, this route sees this vhost's own host instead of
+	# Traefik's, and redirects the user back to the panel's own root instead
+	# of Studio (confirmed live). header_up here passes Traefik's original
+	# value through unchanged, for this route only.
+	#
+	# This is safe: the route itself only trusts a forwarded host that falls
+	# under INSTANCE_DOMAIN and isn't the panel's own host, so a forged header
+	# from a direct internet request can't be used as an open redirect either
+	# way — this exists to make the legitimate case work, not to widen what's
+	# trusted.
+	handle /api/auth/verify {
+		reverse_proxy 127.0.0.1:3000 {
+			header_up X-Forwarded-Host {http.request.header.X-Forwarded-Host}
+		}
+	}
+
+	# ---- Panel -----------------------------------------------------------
+	handle {
+		reverse_proxy 127.0.0.1:3000
+	}
+
+	# ---- Server-Sent Events ----------------------------------------------
+	# Provisioning and bootstrap logs stream over SSE
+	# (/api/db-instances/:id/provision-log, /api/servers/:id/bootstrap-log).
+	# Caddy disables response buffering automatically for text/event-stream, so
+	# these work with the plain reverse_proxy above. Only add an explicit
+	# `flush_interval -1` block if you have inserted a buffering handler.
+
+	# ---- Security headers -------------------------------------------------
+	#
+	# ⚠️ THE APPLICATION OWNS THESE. Do not add them here.
+	#
+	# middleware.ts sets Content-Security-Policy,
+	# X-Content-Type-Options, Referrer-Policy, X-Frame-Options,
+	# Permissions-Policy and Strict-Transport-Security on every response.
+	# Caddy's `header Name value` REPLACES a header rather than
+	# appending, so re-declaring any of them here would silently overwrite the
+	# app's real policy with a weaker one. The specific way that goes wrong:
+	# the app's CSP carries
+	#     frame-src 'self' https://*.INSTANCE_DOMAIN
+	# which is what lets the panel embed each instance's Studio in an iframe
+	# (architecture §4.5). Overwrite the CSP from here and Manage renders a
+	# blank frame with a console error and nothing in any server log.
+	#
+	# (`frame-ancestors 'none'` + `X-Frame-Options: DENY` in the app are about
+	# who may frame the PANEL — nobody — which is a different direction from
+	# the panel framing Studio. Both are correct simultaneously.)
+	#
+	# clipboard-write is deliberately absent from the app's Permissions-Policy:
+	# components/ui/mono-field.tsx uses navigator.clipboard for every
+	# "copy secret / copy fingerprint" button. Do not add it here either.
+	#
+	# The only header worth touching at the proxy is removing the proxy's own
+	# identification. (Next already sets poweredByHeader:false.)
+	header -Server
+
+	log {
+		output file /var/log/caddy/wharf.log
+		format json
+	}
+}
+
+# Optional: refuse anything that arrives on this IP with a different Host, so
+# the panel is only reachable under its configured name.
+# :443 {
+# 	tls internal
+# 	respond 421
+# }

@@ -1,0 +1,188 @@
+# WHARF reverse proxy — nginx + certbot.
+# Equivalent to deploy/Caddyfile for operators who already run nginx.
+# Caddy is the recommended path (automatic TLS, WebSockets need no config);
+# this file exists so nginx shops are not forced to switch.
+#
+# Install:
+#   cp deploy/nginx.conf.example /etc/nginx/sites-available/wharf
+#   sed -i 's/panel.example.com/YOUR.PANEL.HOST/g' /etc/nginx/sites-available/wharf
+#   ln -s /etc/nginx/sites-available/wharf /etc/nginx/sites-enabled/wharf
+#   nginx -t && systemctl reload nginx
+#   certbot --nginx -d panel.example.com --agree-tos -m you@example.com
+#     (certbot rewrites the listen/ssl_* lines below and installs a renewal
+#      timer; `certbot renew --dry-run` proves renewal works)
+#
+# The hostname must equal the PANEL_URL host in /etc/wharf/.env and sit under
+# COOKIE_DOMAIN — see docs/deployment.md, "Domains and the Studio SSO chain".
+
+# WebSocket upgrade plumbing. `''` → `close` so ordinary HTTP keep-alive
+# requests are not sent an Upgrade header. Must live at http{} scope: put this
+# in /etc/nginx/conf.d/wharf-upgrade.conf if your distro's sites-enabled files
+# are included inside http{} (they are on Debian/Ubuntu, so it works here too,
+# but only once across all site files — a duplicate `map` is a config error).
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name panel.example.com;
+
+    # certbot's HTTP-01 challenge lands here; everything else is redirected.
+    location /.well-known/acme-challenge/ {
+        root /var/www/html;
+    }
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name panel.example.com;
+
+    # Managed by certbot after the first issuance.
+    ssl_certificate     /etc/letsencrypt/live/panel.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/panel.example.com/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+
+    # ---- security headers ----------------------------------------------
+    #
+    # ⚠️ THE APPLICATION OWNS THESE — there are deliberately no `add_header`
+    # security directives here.
+    #
+    # middleware.ts emits Content-Security-Policy,
+    # X-Content-Type-Options, Referrer-Policy, X-Frame-Options,
+    # Permissions-Policy and Strict-Transport-Security on every response.
+    # nginx's `add_header` APPENDS, so re-declaring any of them ships two
+    # copies of that header. For CSP the browser then enforces the
+    # INTERSECTION of both policies — which is how a well-meaning
+    # `add_header Content-Security-Policy "default-src 'self'"` here silently
+    # kills the panel's embedded Studio iframe, whose allowance lives in the
+    # app's `frame-src 'self' https://*.INSTANCE_DOMAIN` (architecture §4.5).
+    # Duplicated HSTS/Referrer-Policy headers are merely confusing; a
+    # duplicated CSP is an outage nobody can find.
+    #
+    # If you must add one, add it in next.config.ts, not here.
+    server_tokens off;
+
+    # Nothing large is ever uploaded to the panel.
+    client_max_body_size 4m;
+
+    # ---- Terminal Gateway ----------------------------------------------
+    # `^~` is REQUIRED: without it the regex location below would win over
+    # this prefix match and terminal WebSockets would be proxied to the panel.
+    # The prefix is NOT stripped — gateway/src/auth.ts routes on the full
+    # path /ws/terminal/:serverId.
+    location ^~ /ws/ {
+        proxy_pass http://127.0.0.1:3001;
+
+        # The three lines that make WebSockets work. Omitting any one of them
+        # produces a 400/502 at handshake time, not a runtime error.
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # A terminal session can sit idle at a shell prompt for a long time.
+        # nginx's 60s default would drop it mid-session; the gateway's own
+        # 30-minute idle timeout is the intended limit, so allow more than
+        # that here (3600s) and let the application decide.
+        proxy_read_timeout  3600s;
+        proxy_send_timeout  3600s;
+        proxy_buffering off;
+    }
+
+    # ---- Server-Sent Events --------------------------------------------
+    # Provisioning/bootstrap/restore/sync log streams. Buffering must be off or
+    # the browser sees nothing until the multi-minute job finishes, and the read
+    # timeout must exceed the longest job (a large restore — or a live-source
+    # sync copying storage objects — can run well past provisioning's own
+    # ~5 min health-check budget).
+    location ~ ^/api/(db-instances|servers)/[^/]+/(provision-log|bootstrap-log|restore-log|sync-log)$ {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Connection "";
+        proxy_buffering off;
+        proxy_cache off;
+        gzip off;
+        chunked_transfer_encoding on;
+        proxy_read_timeout 3600s;
+    }
+
+    # ---- Traefik forwardAuth gate -----------------------------------------
+    # Traefik (on each database server) calls this endpoint with its own
+    # X-Forwarded-Host/-Proto/-Uri describing the ORIGINAL studio-*.domain
+    # request — that's how the panel knows what to bounce the user back to
+    # after login (see app/api/auth/verify/route.ts). If this vhost also sets
+    # those same header names (as the `location /` block below does, and as
+    # many control-panel-generated vhosts — e.g. CloudPanel — do by default),
+    # whichever value is set LAST wins and Traefik's real values never arrive:
+    # the route then sees this vhost's own $host and redirects the user back
+    # to the panel's own root instead of Studio. This location MUST come
+    # before `location /` and must NOT set X-Forwarded-Host/-Server/-Uri, so
+    # Traefik's values pass through untouched.
+    #
+    # This is safe: the route itself only trusts a forwarded host that falls
+    # under INSTANCE_DOMAIN and isn't the panel's own host, so a forged header
+    # from a direct internet request can't be used as an open redirect either
+    # way — this location exists to make the legitimate case WORK, not to
+    # widen what's trusted.
+    location = /api/auth/verify {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+
+    # ---- Restore upload -------------------------------------------
+    # A Postgres backup upload can be large (up to MAX_RESTORE_UPLOAD_BYTES,
+    # 2 GiB) and the server-block default above is deliberately tiny (this is
+    # the ONE route that needs a large body — everything else stays capped).
+    # client_max_body_size only widens the limit for this location; every
+    # other route keeps the 4m default.
+    location ~ ^/api/db-instances/[^/]+/restore$ {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        client_max_body_size 2048m;
+        # Generous read/body timeouts: the response only waits for the upload
+        # to finish and the restore JOB to be accepted (not for the restore
+        # itself, which runs in the background and streams over .../restore-log),
+        # but a multi-GB upload over a slow link can still take a while.
+        client_body_timeout 600s;
+        proxy_read_timeout 600s;
+    }
+
+    # ---- Panel -----------------------------------------------------------
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # Provisioning POSTs return immediately (the job runs in-process and is
+        # watched over SSE), but bootstrap re-runs and secret reveals can take
+        # a while. 300s is comfortably above anything the API does synchronously.
+        proxy_read_timeout 300s;
+    }
+}

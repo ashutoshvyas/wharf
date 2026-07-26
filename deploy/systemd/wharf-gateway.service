@@ -1,0 +1,67 @@
+# WHARF Terminal Gateway.
+#
+# Install: cp deploy/systemd/wharf-gateway.service /etc/systemd/system/
+#          systemctl daemon-reload && systemctl enable --now wharf-gateway
+#
+# Standalone Node service (ws + ssh2, architecture §4.2). It decrypts server
+# credentials itself with WHARF_MASTER_KEY and verifies the panel's NextAuth
+# session cookie with NEXTAUTH_SECRET — so it needs exactly the same env file
+# as the panel, and the two must never diverge.
+
+[Unit]
+Description=WHARF terminal gateway (WebSocket ⇄ SSH)
+Documentation=file:/opt/wharf/docs/terminal-protocol.md
+Wants=network-online.target
+After=network-online.target
+# Not a hard dependency: the gateway authenticates against the shared JWT
+# secret, not against the panel process, so it works while the panel is down.
+After=wharf-panel.service
+
+[Service]
+Type=simple
+User=wharf
+Group=wharf
+WorkingDirectory=/opt/wharf
+
+Environment=NODE_ENV=production
+# GATEWAY_PORT comes from /etc/wharf/.env (default 3001 if unset). The gateway
+# validates DATABASE_URL, NEXTAUTH_SECRET, WHARF_MASTER_KEY and GATEWAY_PORT at
+# boot and exits 1 with a plain-English list if any is wrong — check
+# `journalctl -u wharf-gateway -n 30` after a failed start.
+EnvironmentFile=/etc/wharf/.env
+
+# Compiled by `npm run build -w gateway` (tsc -p gateway/tsconfig.json,
+# outDir: dist). Paths are relative to WorkingDirectory.
+ExecStart=/usr/bin/node gateway/dist/index.js
+
+Restart=on-failure
+RestartSec=5
+# Terminal sessions are interactive; give open shells a moment to close and
+# their audit rows to be written before SIGKILL.
+TimeoutStopSec=20
+KillSignal=SIGTERM
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=wharf-gateway
+
+# ---- hardening ----
+# Same rationale as wharf-panel.service; see the comments there.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+# No ReadWritePaths at all: the gateway writes nothing to disk. Its audit rows
+# go to Postgres and its logs go to journald. If a future change needs a
+# writable path, add it here explicitly rather than relaxing ProtectSystem.
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+# Again: no MemoryDenyWriteExecute (kills the JIT), no PrivateNetwork
+# (outbound SSH to every managed server is the entire point).
+
+[Install]
+WantedBy=multi-user.target

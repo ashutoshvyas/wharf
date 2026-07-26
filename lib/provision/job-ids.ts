@@ -1,0 +1,17 @@
+/**
+ * Job-id helpers (contract §4) — deliberately dependency-free.
+ *
+ * These live apart from pipeline.ts because modules that only need to *name*
+ * a job (crash recovery, route handlers, the instrumentation hook) must not
+ * drag in the pipeline's transitive `lib/ssh` → `ssh2` native-addon graph.
+ * Importing that chain from anything Next compiles for the edge runtime
+ * fails the build ("Node.js binary module … is not supported in the browser").
+ */
+
+export function provisionJobId(instanceId: string): string {
+  return `provision:${instanceId}`;
+}
+
+export function removeJobId(instanceId: string): string {
+  return `remove:${instanceId}`;
+}

@@ -1,0 +1,16 @@
+# WHARF forwardAuth middleware — rendered by lib/bootstrap
+# ({{PANEL_URL}} substituted from PANEL_URL) and uploaded to
+# /opt/wharf/traefik/dynamic/wharf-auth.yml. Studio routers reference it
+# as `wharf-auth@file` (lib/bootstrap/constants.ts) to gate
+# studio-{slug}.domain behind the panel session (architecture §4.5).
+#
+# Forward-compatible: the panel's /api/auth/verify endpoint ships in M5.
+# Until then the middleware fails closed — the panel returns a non-2xx for
+# the verify subrequest, so gated routers deny access rather than open up.
+http:
+  middlewares:
+    wharf-auth:
+      forwardAuth:
+        address: "{{PANEL_URL}}/api/auth/verify"
+        authResponseHeaders:
+          - X-Wharf-User

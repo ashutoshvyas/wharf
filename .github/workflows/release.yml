@@ -1,0 +1,185 @@
+# WHARF release — a release is a GIT TAG, not an image.
+#
+# There is no container registry in this product's runtime: the panel and
+# gateway run as plain node processes under systemd (architecture §2).
+# Pushing a `v*` tag runs the full CI gate against that exact commit; only if
+# every check is green is a GitHub Release published. A tag with no Release is
+# a tag that FAILED — never deploy one.
+#
+# Deploy a released tag with:  deploy/deploy.sh v1.4.0
+# Roll back with:              deploy/deploy.sh <previous tag>   ← code only;
+# migrations are never reversed (see the banner in deploy/deploy.sh).
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # Identical gate to .github/workflows/ci.yml, re-run against the tagged
+  # commit. Deliberately duplicated rather than reused: a tag must be proven
+  # green on its own, not inherited from a branch build that may predate it.
+  verify:
+    name: Verify tag
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: wharf
+          POSTGRES_PASSWORD: wharf
+          POSTGRES_DB: wharf
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U wharf"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://wharf:wharf@localhost:5432/wharf
+      DIRECT_URL: postgresql://wharf:wharf@localhost:5432/wharf
+      # next.config.ts builds the CSP in headers(), which Next evaluates at
+      # BUILD time and freezes into .next/routes-manifest.json. Setting these
+      # makes the release build exercise the production code path so the
+      # assertion below is meaningful.
+      INSTANCE_DOMAIN: release-check.example
+      NEXT_PUBLIC_GATEWAY_WS_URL: wss://panel.release-check.example
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Generate ephemeral test credentials
+        run: |
+          for key in NEXTAUTH_SECRET WHARF_MASTER_KEY ADMIN_PASSWORD; do
+            value="$(openssl rand -base64 32)"
+            printf '::add-mask::%s\n' "$value"
+            printf '%s=%s\n' "$key" "$value" >> "$GITHUB_ENV"
+          done
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install verified Gitleaks binary
+        run: |
+          version=8.30.1
+          archive="gitleaks_${version}_linux_x64.tar.gz"
+          base="https://github.com/gitleaks/gitleaks/releases/download/v${version}"
+          curl --fail --location --silent --show-error "$base/$archive" -o "$RUNNER_TEMP/$archive"
+          curl --fail --location --silent --show-error "$base/gitleaks_${version}_checksums.txt" -o "$RUNNER_TEMP/gitleaks-checksums.txt"
+          cd "$RUNNER_TEMP"
+          awk -v file="$archive" '$2 == file' gitleaks-checksums.txt | sha256sum --check --strict
+          tar -xzf "$archive" gitleaks
+          ./gitleaks version
+      - name: Scan reachable history for credentials
+        run: '"$RUNNER_TEMP/gitleaks" git --redact --log-opts=--all'
+      - run: npm ci
+      - run: npx prisma generate
+        if: hashFiles('prisma/schema.prisma') != ''
+      - run: npx prisma migrate deploy
+        if: hashFiles('prisma/migrations/**') != ''
+      - run: npm run lint
+      - run: npx tsx scripts/check-secret-logging.ts
+      - run: npm audit --omit=dev --audit-level=critical
+      - run: npm run typecheck
+      - run: npm run typecheck -w gateway
+      - run: npm test
+      - run: npm run build
+      - run: npm run build -w gateway
+
+      # The panel build must actually produce the standalone entry point that
+      # deploy/systemd/wharf-panel.service execs, and the gateway build must
+      # produce the file wharf-gateway.service execs. Catch a next.config.ts
+      # or tsconfig outDir change here, not on the VPS at 2am.
+      - name: Assert deployable build artefacts
+        run: |
+          test -f .next/standalone/server.js \
+            || { echo "::error::.next/standalone/server.js missing — is output:\"standalone\" still set in next.config.ts? deploy/systemd/wharf-panel.service execs this path."; exit 1; }
+          test -d .next/static \
+            || { echo "::error::.next/static missing — deploy/deploy.sh copies this into the standalone bundle."; exit 1; }
+          test -f gateway/dist/index.js \
+            || { echo "::error::gateway/dist/index.js missing — deploy/systemd/wharf-gateway.service execs this path."; exit 1; }
+          echo "✓ standalone server, static assets and gateway entry point all present"
+
+      # Guards the failure mode with no server-side symptom: a build whose
+      # baked-in CSP forbids the Studio iframe or the terminal WebSocket.
+      # deploy/deploy.sh runs the same assertion on the VPS.
+      - name: Assert the built CSP is environment-aware
+        run: |
+          node -e '
+            const m = require("./.next/routes-manifest.json");
+            const csp = (m.headers ?? [])
+              .flatMap((h) => h.headers ?? [])
+              .find((h) => h.key === "Content-Security-Policy");
+            if (!csp) { console.log("no CSP in routes-manifest — nothing to assert"); process.exit(0); }
+            const bad = [];
+            if (!csp.value.includes(`*.${process.env.INSTANCE_DOMAIN}`)) bad.push("frame-src does not pick up INSTANCE_DOMAIN — the Studio iframe would be blocked in production");
+            if (!csp.value.includes(process.env.NEXT_PUBLIC_GATEWAY_WS_URL)) bad.push("connect-src does not pick up NEXT_PUBLIC_GATEWAY_WS_URL — the terminal WebSocket would be blocked");
+            if (bad.length) { for (const b of bad) console.log("::error::" + b); console.log("value: " + csp.value); process.exit(1); }
+            console.log("✓ CSP is built from the environment");
+          '
+
+  release:
+    name: Publish GitHub Release
+    permissions:
+      contents: write # only this job creates the Release
+    needs: verify # ← the gate. A red `verify` means no Release is ever created.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0 # full history so release notes can diff against the previous tag
+          persist-credentials: false
+
+      # Pre-release for anything with a hyphen: v1.4.0-rc.1, v2.0.0-beta.
+      - name: Classify tag
+        id: tag
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          echo "name=$TAG" >> "$GITHUB_OUTPUT"
+          case "$TAG" in
+            *-*) echo "prerelease=true"  >> "$GITHUB_OUTPUT" ;;
+            *)   echo "prerelease=false" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      # --generate-notes builds the changelog from the commits since the
+      # previous tag. --verify-tag refuses if the ref is not a real tag.
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.name }}
+          PRERELEASE: ${{ steps.tag.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          NOTES_FILE="$(mktemp)"
+          cat > "$NOTES_FILE" <<'PREAMBLE'
+          ## Deploying this release
+
+          ```bash
+          ssh <panel-vps>
+          sudo /opt/wharf/deploy/backup.sh          # always, before a deploy
+          sudo /opt/wharf/deploy/deploy.sh TAG_PLACEHOLDER
+          ```
+
+          **Rollback is asymmetric.** `deploy.sh <previous tag>` rolls back the
+          code in about two minutes. It does **not** roll back database
+          migrations — there is no `prisma migrate down`. If this release
+          contains a destructive migration, the only way back is
+          `deploy/restore.sh` with a backup taken *before* the deploy, and that
+          restore is useless without `WHARF_MASTER_KEY`.
+          See `docs/runbook.md` → "Rolling back a release".
+
+          ---
+          PREAMBLE
+          sed -i "s/TAG_PLACEHOLDER/${TAG}/" "$NOTES_FILE"
+
+          ARGS=(--title "$TAG" --generate-notes --notes-file "$NOTES_FILE" --verify-tag)
+          if [ "$PRERELEASE" = "true" ]; then ARGS+=(--prerelease); fi
+          gh release create "$TAG" "${ARGS[@]}"

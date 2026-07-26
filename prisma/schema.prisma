@@ -1,0 +1,132 @@
+// WHARF data model — mirrors docs/spec-v2.md §3 (see docs/architecture.md §3 for notes).
+// Models are PascalCase / fields camelCase; @@map/@map keep the SQL in snake_case.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  // Runtime connection — on Supabase use the pooled (pgbouncer) string, port 6543.
+  url       = env("DATABASE_URL")
+  // Migration/introspection connection — MUST be the direct string, port 5432
+  // (pgbouncer cannot run migrations). Falls back unused if identical.
+  directUrl = env("DIRECT_URL")
+}
+
+enum Role {
+  admin
+  operator
+  viewer
+}
+
+enum AuthMethod {
+  password
+  private_key
+}
+
+enum InstanceStatus {
+  provisioning
+  running
+  stopped
+  error
+  removing
+}
+
+model Server {
+  id                 String     @id @default(uuid())
+  name               String
+  host               String
+  sshPort            Int        @default(22) @map("ssh_port")
+  sshUser            String     @map("ssh_user")
+  authMethod         AuthMethod @map("auth_method")
+  sshPasswordEnc     Bytes?     @map("ssh_password_enc")
+  sshPrivateKeyEnc   Bytes?     @map("ssh_private_key_enc")
+  linkedPanelUrl     String?    @map("linked_panel_url")
+  panelUserEnc       Bytes?     @map("panel_user_enc")
+  panelPassEnc       Bytes?     @map("panel_pass_enc")
+  bootstrapped       Boolean    @default(false)
+  reachable          Boolean    @default(true)
+  hostKeyFingerprint String?    @map("host_key_fingerprint")
+  tags               String[]
+  createdAt          DateTime   @default(now()) @map("created_at")
+  updatedAt          DateTime   @updatedAt @map("updated_at")
+
+  websites    Website[]
+  dbInstances DbInstance[]
+
+  @@map("servers")
+}
+
+model Website {
+  id                String   @id @default(uuid())
+  domain            String
+  serverId          String   @map("server_id")
+  path              String
+  dbInstanceId      String?  @map("db_instance_id")
+  credentialLabel   String   @default("Admin login") @map("credential_label")
+  accessUsername    String?  @map("access_username")
+  accessPasswordEnc Bytes?   @map("access_password_enc")
+  notes             String   @default("")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  server     Server      @relation(fields: [serverId], references: [id], onDelete: Restrict)
+  dbInstance DbInstance? @relation(fields: [dbInstanceId], references: [id], onDelete: SetNull)
+
+  @@map("websites")
+}
+
+model DbInstance {
+  id                 String         @id @default(uuid())
+  serverId           String         @map("server_id")
+  name               String
+  slug               String         @unique
+  composeProjectName String         @map("compose_project_name")
+  remotePath         String         @map("remote_path")
+  apiSubdomain       String         @map("api_subdomain")
+  studioSubdomain    String         @map("studio_subdomain")
+  pgPasswordEnc      Bytes?         @map("pg_password_enc")
+  anonKeyEnc         Bytes?         @map("anon_key_enc")
+  serviceRoleKeyEnc  Bytes?         @map("service_role_key_enc")
+  jwtSecretEnc       Bytes?         @map("jwt_secret_enc")
+  status             InstanceStatus @default(provisioning)
+  lastActionLog      String?        @map("last_action_log")
+  healthCheckedAt    DateTime?      @map("health_checked_at")
+  deletedAt          DateTime?      @map("deleted_at")
+  createdAt          DateTime       @default(now()) @map("created_at")
+  updatedAt          DateTime       @updatedAt @map("updated_at")
+
+  server   Server    @relation(fields: [serverId], references: [id], onDelete: Restrict)
+  websites Website[]
+
+  @@unique([serverId, remotePath])
+  @@map("db_instances")
+}
+
+model PanelUser {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  role         Role     @default(viewer)
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@map("panel_users")
+}
+
+// Insert-only (enforced by a Postgres trigger, migration 20260724000002_audit_immutable).
+model AuditLog {
+  id         String   @id @default(uuid())
+  userId     String?  @map("user_id")
+  userEmail  String?  @map("user_email")
+  action     String
+  targetType String   @map("target_type")
+  targetId   String?  @map("target_id")
+  metadata   Json     @default("{}")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([createdAt(sort: Desc)])
+  @@index([action])
+  @@map("audit_log")
+}
