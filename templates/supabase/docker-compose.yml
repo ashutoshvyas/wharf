@@ -442,6 +442,30 @@ services:
       # S3 protocol endpoint configuration
       S3_PROTOCOL_ACCESS_KEY_ID: ${S3_PROTOCOL_ACCESS_KEY_ID}
       S3_PROTOCOL_ACCESS_KEY_SECRET: ${S3_PROTOCOL_ACCESS_KEY_SECRET}
+
+      # Vector buckets (, pgvector backend) — always on, no per-instance
+      # toggle: this reuses the same Postgres container, so there's nothing
+      # to opt into. VECTOR_DATABASE_URL is a maintenance connection —
+      # storage-api itself runs CREATE DATABASE against it and derives its
+      # own storage_vectors database from the result.
+      VECTOR_ENABLED: ${VECTOR_ENABLED}
+      VECTOR_BUCKET_PROVIDER: ${VECTOR_BUCKET_PROVIDER}
+      VECTOR_DATABASE_URL: ${VECTOR_DATABASE_URL}
+      VECTOR_DATABASE_CREATE: ${VECTOR_DATABASE_CREATE}
+      VECTOR_STORE_MIGRATIONS_ENABLED: ${VECTOR_STORE_MIGRATIONS_ENABLED}
+
+      # Analytics buckets (Iceberg, ) — opt-in, see .env.template.
+      # No depends_on relationship to lakekeeper/minio below on purpose:
+      # both are `profiles: ["analytics"]` and storage is not, so a hard
+      # dependency here would force Compose to start them even when the
+      # profile is inactive. storage-api only opens the Iceberg REST catalog
+      # connection lazily, on the first Analytics-bucket request, so it
+      # tolerates lakekeeper not being ready yet at its own boot.
+      ICEBERG_ENABLED: ${ICEBERG_ENABLED}
+      ICEBERG_CATALOG_URL: ${ICEBERG_CATALOG_URL}
+      ICEBERG_WAREHOUSE: ${ICEBERG_WAREHOUSE}
+      ICEBERG_CATALOG_AUTH_TYPE: ${ICEBERG_CATALOG_AUTH_TYPE}
+      ICEBERG_CATALOG_AUTH_TOKEN: ${ICEBERG_CATALOG_AUTH_TOKEN}
     volumes:
       - ./volumes/storage:/var/lib/storage:z
 
@@ -538,5 +562,114 @@ services:
         "log_min_messages=fatal" # prevents Realtime polling queries from appearing in logs
       ]
 
+  ## Analytics buckets (Iceberg, ) — all 4 services below are
+  ## `profiles: ["analytics"]`: defined for every instance, but Docker
+  ## Compose only creates/starts them when COMPOSE_PROFILES=analytics is set
+  ## in .env (see lib/provision/analytics-settings.ts). None are on the
+  ## Traefik network — no public route, instance-internal only, same trust
+  ## model as this project's own `db` port today.
+  minio:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    restart: unless-stopped
+    profiles: ["analytics"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      # `mc` ships bundled in this image specifically so healthchecks don't
+      # need curl (which the official image does not include).
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # One-shot: creates this instance's single analytics bucket, then exits.
+  minio-init:
+    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
+    profiles: ["analytics"]
+    restart: "no"
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" &&
+        mc mb --ignore-existing local/analytics
+
+  # One-shot: Lakekeeper's own Postgres schema migrations, run before `serve`.
+  lakekeeper-migrate:
+    image: quay.io/lakekeeper/catalog:v0.11.0
+    profiles: ["analytics"]
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      LAKEKEEPER__PG_ENCRYPTION_KEY: ${LAKEKEEPER_PG_ENCRYPTION_KEY}
+      LAKEKEEPER__PG_DATABASE_URL_READ: postgres://postgres:${POSTGRES_PASSWORD}@db:5432/postgres
+      LAKEKEEPER__PG_DATABASE_URL_WRITE: postgres://postgres:${POSTGRES_PASSWORD}@db:5432/postgres
+    command: ["migrate"]
+
+  lakekeeper:
+    image: quay.io/lakekeeper/catalog:v0.11.0
+    restart: unless-stopped
+    profiles: ["analytics"]
+    depends_on:
+      lakekeeper-migrate:
+        condition: service_completed_successfully
+    environment:
+      LAKEKEEPER__PG_ENCRYPTION_KEY: ${LAKEKEEPER_PG_ENCRYPTION_KEY}
+      LAKEKEEPER__PG_DATABASE_URL_READ: postgres://postgres:${POSTGRES_PASSWORD}@db:5432/postgres
+      LAKEKEEPER__PG_DATABASE_URL_WRITE: postgres://postgres:${POSTGRES_PASSWORD}@db:5432/postgres
+      # No OIDC/auth config set at all — this IS Lakekeeper's documented
+      # "Unsecured" mode (confirmed against its own minimal example, which
+      # sets no auth-related vars either): any bearer token is accepted.
+      # Safe here because this service has no public route.
+    command: ["serve"]
+    healthcheck:
+      test: ["CMD", "/home/nonroot/lakekeeper", "healthcheck"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # One-shot: bootstraps Lakekeeper and creates this instance's single
+  # warehouse pointing at the MinIO bucket minio-init just created, then
+  # exits. Tolerates re-runs — Lakekeeper only bootstraps once, and the
+  # warehouse-name is fixed, so both calls are treated as already-done
+  # rather than fatal on a second pass.
+  lakekeeper-init:
+    image: curlimages/curl:8.21.0
+    profiles: ["analytics"]
+    restart: "no"
+    depends_on:
+      lakekeeper:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        curl -sf -X POST http://lakekeeper:8181/management/v1/bootstrap \
+          -H 'Content-Type: application/json' \
+          -d '{"accept-terms-of-use": true}' || true
+        curl -sf -X POST http://lakekeeper:8181/management/v1/warehouse \
+          -H 'Content-Type: application/json' \
+          -d "{\"warehouse-name\": \"default\", \"storage-profile\": {\"type\": \"s3\", \"bucket\": \"analytics\", \"region\": \"us-east-1\", \"endpoint\": \"http://minio:9000\", \"flavor\": \"s3-compat\", \"path-style-access\": true, \"sts-enabled\": false}, \"storage-credential\": {\"type\": \"s3\", \"credential-type\": \"access-key\", \"access-key-id\": \"$$MINIO_ROOT_USER\", \"secret-access-key\": \"$$MINIO_ROOT_PASSWORD\"}}" || true
+
 volumes:
   db-config:
+  minio-data:

@@ -170,3 +170,37 @@ export interface AncillarySecrets {
   s3AccessKeySecret: string;
   dashboardPassword: string;
 }
+
+/**
+ * Analytics buckets' (Iceberg, ) supporting secrets — MinIO's root
+ * password, the static bearer token storage-api sends to Lakekeeper's
+ * Iceberg REST catalog, and Lakekeeper's own at-rest encryption key for its
+ * Postgres metadata store. Derived the same way as {@link deriveAncillarySecrets}
+ * and for the same reason: these are only ever reachable from inside this
+ * instance's own Docker network (Lakekeeper runs "Unsecured" — see
+ * templates/supabase/docker-compose.yml), so a fresh independently-rotatable
+ * secret would add storage without adding real security — anyone who already
+ * has jwtSecret holds the service_role key, i.e. full API/DB access.
+ */
+export function deriveAnalyticsSecrets(jwtSecret: string): AnalyticsSecrets {
+  if (!jwtSecret || jwtSecret.length < 32) {
+    throw new Error("deriveAnalyticsSecrets: jwtSecret must be at least 32 characters.");
+  }
+  const derive = (label: string, chars: number): string =>
+    createHmac("sha512", jwtSecret).update(`wharf:${label}`).digest("hex").slice(0, chars);
+
+  return {
+    minioRootPassword: derive("minio_root_password", 32),
+    icebergCatalogToken: derive("iceberg_catalog_token", 40),
+    lakekeeperPgEncryptionKey: derive("lakekeeper_pg_encryption_key", 32),
+  };
+}
+
+export interface AnalyticsSecrets {
+  minioRootPassword: string;
+  icebergCatalogToken: string;
+  lakekeeperPgEncryptionKey: string;
+}
+
+/** Fixed MinIO root username — only the password needs randomness. */
+export const MINIO_ROOT_USER = "wharf-minio-root";

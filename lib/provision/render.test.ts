@@ -7,7 +7,7 @@ import {
   WHARF_AUTH_MIDDLEWARE,
   WHARF_STUDIO_FRAME_MIDDLEWARE,
 } from "@/lib/bootstrap/constants";
-import { deriveAncillarySecrets, type InstanceSecrets } from "./secrets";
+import { deriveAnalyticsSecrets, deriveAncillarySecrets, type InstanceSecrets } from "./secrets";
 import {
   kongLabels,
   renderInstanceCompose,
@@ -215,24 +215,37 @@ describe("renderInstanceCompose — host ports", () => {
 });
 
 describe("renderInstanceCompose — vendored template integrity", () => {
-  it("carries exactly the nine services WHARF ships, all pinned", async () => {
+  it("carries exactly the fourteen services WHARF ships, all pinned", async () => {
     const { doc, composeYaml } = await renderDoc();
     expect(Object.keys(doc.services).sort()).toEqual([
       "auth",
       "db",
       "imgproxy",
       "kong",
+      "lakekeeper",
+      "lakekeeper-init",
+      "lakekeeper-migrate",
       "meta",
+      "minio",
+      "minio-init",
       "realtime",
       "rest",
       "storage",
       "studio",
     ]);
     const images = [...composeYaml.matchAll(/^\s+image:\s*(\S+)/gm)].map((m) => m[1] ?? "");
-    expect(images).toHaveLength(9);
+    expect(images).toHaveLength(14);
     for (const image of images) {
       expect(image).toContain(":");
       expect(image.endsWith(":latest")).toBe(false);
+    }
+  });
+
+  it("keeps the 4 analytics-bucket services off the Traefik network, and never auto-started (profile-gated)", async () => {
+    const { doc } = await renderDoc();
+    for (const name of ["minio", "minio-init", "lakekeeper", "lakekeeper-migrate", "lakekeeper-init"]) {
+      const service = doc.services[name] as { profiles?: string[] } | undefined;
+      expect(service?.profiles).toEqual(["analytics"]);
     }
   });
 
@@ -588,5 +601,58 @@ describe("renderInstanceCompose — Email templates", () => {
         ],
       }),
     ).rejects.toThrow(/line break/);
+  });
+});
+
+describe("renderInstanceCompose — Vector buckets", () => {
+  it("is always on, with no input needed to enable it", async () => {
+    const { envFile } = await renderDoc();
+    expect(envValue(envFile, "VECTOR_ENABLED")).toBe("true");
+    expect(envValue(envFile, "VECTOR_BUCKET_PROVIDER")).toBe("pgvector");
+    expect(envValue(envFile, "VECTOR_DATABASE_CREATE")).toBe("true");
+    expect(envValue(envFile, "VECTOR_STORE_MIGRATIONS_ENABLED")).toBe("true");
+  });
+
+  it("builds a maintenance connection string using the postgres superuser, not supabase_storage_admin", async () => {
+    const { envFile } = await renderDoc();
+    expect(envValue(envFile, "VECTOR_DATABASE_URL")).toBe(
+      `postgres://postgres:${SECRETS.pgPassword}@db:5432/postgres`,
+    );
+  });
+});
+
+describe("renderInstanceCompose — Analytics buckets", () => {
+  it("defaults to disabled with an empty COMPOSE_PROFILES, so MinIO/Lakekeeper never start", async () => {
+    const { envFile } = await renderDoc();
+    expect(envValue(envFile, "ICEBERG_ENABLED")).toBe("false");
+    expect(envValue(envFile, "COMPOSE_PROFILES")).toBe("");
+  });
+
+  it("sets ICEBERG_ENABLED and COMPOSE_PROFILES=analytics when enabled", async () => {
+    const { envFile } = await renderDoc({ analyticsSettings: { enabled: true } });
+    expect(envValue(envFile, "ICEBERG_ENABLED")).toBe("true");
+    expect(envValue(envFile, "COMPOSE_PROFILES")).toBe("analytics");
+  });
+
+  it("derives MinIO/Iceberg/Lakekeeper secrets from jwtSecret — never freshly random per render", async () => {
+    const { envFile } = await renderDoc();
+    const derived = deriveAnalyticsSecrets(SECRETS.jwtSecret);
+    expect(envValue(envFile, "MINIO_ROOT_PASSWORD")).toBe(derived.minioRootPassword);
+    expect(envValue(envFile, "ICEBERG_CATALOG_AUTH_TOKEN")).toBe(derived.icebergCatalogToken);
+    expect(envValue(envFile, "LAKEKEEPER_PG_ENCRYPTION_KEY")).toBe(
+      derived.lakekeeperPgEncryptionKey,
+    );
+  });
+
+  it("points ICEBERG_CATALOG_URL at the instance-internal lakekeeper service, and sets a fixed warehouse/auth type", async () => {
+    const { envFile } = await renderDoc();
+    expect(envValue(envFile, "ICEBERG_CATALOG_URL")).toBe("http://lakekeeper:8181/catalog");
+    expect(envValue(envFile, "ICEBERG_WAREHOUSE")).toBe("default");
+    expect(envValue(envFile, "ICEBERG_CATALOG_AUTH_TYPE")).toBe("token");
+  });
+
+  it("MINIO_ROOT_USER is the same fixed constant regardless of input", async () => {
+    const { envFile } = await renderDoc();
+    expect(envValue(envFile, "MINIO_ROOT_USER")).toBe("wharf-minio-root");
   });
 });
