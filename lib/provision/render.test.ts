@@ -149,6 +149,35 @@ describe("renderInstanceCompose — networks", () => {
     expect(networks.default?.aliases).toEqual(["api-gw"]);
   });
 
+  it("gives no service a fixed container_name — a second instance on the same server must be able to start", async () => {
+    // Regression test: every upstream service had a fixed container_name
+    // (e.g. supabase-imgproxy), which Docker requires to be unique per HOST,
+    // not per compose project. Confirmed live: a second instance's
+    // `docker compose up -d` failed with "Conflict. The container name
+    // '/supabase-imgproxy' is already in use" the moment it was provisioned
+    // onto a server already running a first instance.
+    const { doc } = await renderDoc();
+    for (const [name, service] of Object.entries(doc.services)) {
+      expect([name, (service as { container_name?: unknown })?.container_name]).toEqual([
+        name,
+        undefined,
+      ]);
+    }
+  });
+
+  it("keeps realtime's tenant hostname as a project-scoped network alias, not a fixed container_name", async () => {
+    // realtime constructs its tenant id from this hostname, and kong.yml's
+    // own realtime route resolves it by the same name — it can't just lose
+    // its name like the other services, but a network alias is scoped to
+    // this instance's own private network (unlike container_name, which is
+    // host-global), so it's safe to reuse the identical alias across every
+    // instance on the same server.
+    const { doc } = await renderDoc();
+    const networks = doc.services.realtime?.networks as Record<string, { aliases?: string[] }>;
+    expect(networks.default?.aliases).toEqual(["realtime-dev.supabase-realtime"]);
+    expect((doc.services.realtime as { container_name?: unknown })?.container_name).toBeUndefined();
+  });
+
   it("never puts db on the traefik network", async () => {
     const { doc } = await renderDoc();
     // Postgres must not be reachable from the shared network — other tenants
