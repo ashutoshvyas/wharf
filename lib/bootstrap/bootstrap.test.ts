@@ -102,14 +102,20 @@ describe("templates", () => {
     const compose = await readFile(path.join(base, "docker-compose.yml"), "utf8");
     expect(compose).toContain(TRAEFIK_NETWORK);
     expect(compose).toContain("external: true");
-    // Bugfix regression: without an explicit DOCKER_API_VERSION, some hosts'
-    // docker.sock fails the Docker SDK's version auto-negotiation and
-    // Traefik's client falls back to an ancient default the daemon refuses
-    // ("client version 1.24 is too old"). Traefik then never discovers ANY
-    // container's labels — silently, retrying forever — which is exactly
-    // the failure mode that made every provisioned instance unreachable
-    // despite healthy containers and correctly-rendered compose labels.
-    expect(compose).toMatch(/DOCKER_API_VERSION\s*=\s*1\.\d+/);
+    // Bugfix regression: Traefik v3.1-v3.5's docker provider hardcoded API
+    // version 1.24 as its negotiation baseline and did not reliably respect
+    // an explicit DOCKER_API_VERSION override either (confirmed against a
+    // real host — setting it had zero effect, identical daemon error, even
+    // after a full container recreation). Modern Docker Engine releases
+    // (29.x+) refuse that version outright, so Traefik silently never
+    // discovers ANY container's labels — retrying forever with no visible
+    // error anywhere except its own logs. v3.6.1 fixed this with proper
+    // automatic negotiation; pin at least that high, never on v3.0-v3.5.
+    const [, major, minor] = /image:\s*traefik:v(\d+)\.(\d+)/.exec(compose) ?? [];
+    expect(major).toBeTruthy();
+    const majorNum = Number(major);
+    const minorNum = Number(minor);
+    expect(majorNum > 3 || (majorNum === 3 && minorNum >= 6)).toBe(true);
     const yml = await readFile(path.join(base, "traefik.yml"), "utf8");
     expect(yml).toContain("letsencrypt");
     expect(yml).toContain("httpChallenge");

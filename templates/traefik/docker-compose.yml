@@ -4,7 +4,24 @@
 # re-uploads this file (architecture §4.1 step 3).
 services:
   traefik:
-    image: traefik:v3.1
+    # Pinned well past v3.6.1 on purpose — Traefik's docker provider had a
+    # confirmed bug through v3.1-v3.5 where its Docker API client hardcoded
+    # version 1.24 as its negotiation baseline and did NOT reliably respect
+    # an explicit DOCKER_API_VERSION override either (verified against a real
+    # host: setting that env var had zero effect, even after a full
+    # container recreation — same "client version 1.24 is too old. Minimum
+    # supported API version is 1.40" error from the daemon, word for word).
+    # Modern Docker Engine releases (29.x+) dropped support for API 1.24
+    # entirely, so on such a host Traefik's docker provider never discovers
+    # ANY container's labels — silently, retrying forever, no visible error
+    # anywhere except its own logs. Traefik v3.6.1 fixed this properly:
+    # the provider now queries the daemon for its real supported version
+    # range and negotiates the highest mutually compatible version
+    # automatically — no env var workaround needed or wanted.
+    # (github.com/traefik/traefik issue #12253; community.traefik.io threads
+    # on "Traefik stops working, it uses old API version 1.24" and "Traefik
+    # Docker provider always tries API v1.24 despite Docker API 1.53".)
+    image: traefik:v3.7.9
     restart: unless-stopped
     ports:
       - "80:80"
@@ -14,19 +31,6 @@ services:
       - ./traefik.yml:/etc/traefik/traefik.yml:ro
       - ./dynamic:/etc/traefik/dynamic:ro
       - ./acme.json:/acme.json
-    environment:
-      # Some hosts' docker.sock (rootless setups, certain panel-managed
-      # sockets, restricted socket proxies) fail the Docker SDK's version
-      # auto-negotiation and the client falls back to an ancient hardcoded
-      # default (API 1.24 — Docker Engine ~2016). Modern daemons refuse that
-      # outright: "client version 1.24 is too old. Minimum supported API
-      # version is 1.40" — and Traefik's docker provider then never
-      # discovers ANY container's labels, silently, retrying forever. Fixing
-      # it at the source (this env var) rather than requiring every host to
-      # have perfectly behaved auto-negotiation. 1.41 (Docker Engine 20.10,
-      # released 2020) comfortably satisfies "minimum 1.40" on virtually any
-      # daemon in current use.
-      - DOCKER_API_VERSION=1.41
     networks:
       - traefik
 
