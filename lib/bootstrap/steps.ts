@@ -137,8 +137,28 @@ const uploadTraefikConfig: BootstrapStep = {
 
 const startTraefik: BootstrapStep = {
   name: "startTraefik",
-  check(conn) {
-    return traefikRunning(conn);
+  // Deliberately never "done", matching uploadTraefikConfig's own comment —
+  // "is Traefik running" and "is Traefik running the config we just
+  // uploaded" are different questions, and this step used to only ask the
+  // first one. Once Traefik was up from the very first bootstrap, every
+  // later re-run saw it running and skipped `docker compose up -d`
+  // entirely, so a changed compose file (e.g. an added environment
+  // variable) was uploaded but never actually applied — confirmed live: the
+  // container's self-signed cert timestamp still matched its original
+  // creation time after a "successful" re-run. `docker compose up -d` is
+  // itself idempotent — Compose only recreates a container whose resolved
+  // config actually changed, and is an instant no-op otherwise — so always
+  // running it here is safe and is what makes re-running bootstrap actually
+  // mean something.
+  async check(conn, emit) {
+    const running = await traefikRunning(conn);
+    emit(
+      "info",
+      running
+        ? "Traefik is running — re-applying to pick up any config changes"
+        : "Traefik is not running",
+    );
+    return false;
   },
   async apply(conn, emit) {
     const stream = lineStreamer(emit);

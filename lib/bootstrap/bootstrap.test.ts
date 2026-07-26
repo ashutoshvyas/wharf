@@ -118,7 +118,7 @@ describe("templates", () => {
 });
 
 describe("bootstrap orchestrator", () => {
-  it("skips every step on a re-run and still marks the server bootstrapped", async () => {
+  it("skips install/network/firewall on a re-run and still marks the server bootstrapped", async () => {
     // docker present, network exists, traefik running, ufw has 80+443.
     execMock.mockImplementation((_c: unknown, cmd: string) => {
       if (cmd.includes("ps --format json")) return Promise.resolve(ok('[{"State":"running"}]'));
@@ -131,10 +131,21 @@ describe("bootstrap orchestrator", () => {
     const { status, lines } = await watchJob(bootstrapJobId("srv-skip"));
 
     expect(status).toBe("ok");
-    // uploadTraefikConfig always applies; the other four report skipped.
+    // uploadTraefikConfig and startTraefik always apply (bugfix: a re-run
+    // must actually pick up a changed compose file, e.g. an added env var —
+    // not just confirm the old container is still running); only
+    // installDocker, createTraefikNetwork and openFirewall report skipped.
     const skipped = lines.filter((l) => l.includes("already done — skipped"));
-    expect(skipped).toHaveLength(4);
+    expect(skipped).toHaveLength(3);
     expect(sftpWriteMock).toHaveBeenCalledTimes(TRAEFIK_TEMPLATE_FILES.length);
+    // The actual regression: `docker compose ... up -d` must run even when
+    // Traefik was already up, or an uploaded config change is silently inert.
+    expect(
+      execMock.mock.calls.some((c) => String(c[1]).includes("up -d")),
+    ).toBe(true);
+    expect(
+      lines.some((l) => l.includes("re-applying to pick up any config changes")),
+    ).toBe(true);
     expect(serverUpdate).toHaveBeenCalledWith({
       where: { id: "srv-skip" },
       data: { bootstrapped: true },
