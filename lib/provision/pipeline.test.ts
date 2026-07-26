@@ -182,14 +182,32 @@ describe("startProvision — happy path", () => {
       expect(uploaded.some((p) => p.endsWith(f))).toBe(true);
     }
     // .gitkeep placeholders must never go through sftpWrite (untested
-    // zero-byte edge case) — the three empty dirs are created via a single
-    // batched `mkdir -p` exec call instead.
+    // zero-byte edge case) — their directories are covered by the same
+    // upfront mkdir -p as everything else.
     expect(uploaded.some((p) => p.endsWith(".gitkeep"))).toBe(false);
+
+    // Every directory this phase will write into is created ONE explicit,
+    // checked `mkdir -p` up front — not sftpWrite's own best-effort SFTP
+    // mkdir loop (which silently swallows every error, masking a genuine
+    // failure until a later, unrelated-looking write fails instead).
     const mkdirCall = execMock.mock.calls.find((c) => String(c[1]).startsWith("mkdir -p"));
     expect(mkdirCall).toBeTruthy();
-    for (const dir of ["volumes/storage", "volumes/snippets", "volumes/functions"]) {
+    for (const dir of [
+      "volumes/db",
+      "volumes/api",
+      "volumes/storage",
+      "volumes/snippets",
+      "volumes/functions",
+    ]) {
       expect(String(mkdirCall![1])).toContain(dir);
     }
+    // remotePath itself (for docker-compose.yml/.env) is included too, not
+    // just the volumes/ subdirectories.
+    expect(String(mkdirCall![1])).toMatch(/'\/opt\/db-instances\/sb_\w+'/);
+    // ...and it runs BEFORE any file is written.
+    const mkdirIndex = execMock.mock.calls.indexOf(mkdirCall!);
+    const firstSftpCallOrder = execMock.mock.invocationCallOrder[mkdirIndex]!;
+    expect(sftpWriteMock.mock.invocationCallOrder[0]).toBeGreaterThan(firstSftpCallOrder);
 
     // Secrets sealed (Uint8Array), status running.
     const final = instanceUpdate.mock.calls
@@ -251,6 +269,29 @@ describe("startProvision — failure handling", () => {
     expect(status).toBe("error");
     expect(lines.some((l) => l.includes("port 80 is in use"))).toBe(true);
     // Never reached the point of uploading anything to the server.
+    expect(sftpWriteMock).not.toHaveBeenCalled();
+  });
+
+  it("fails loudly and clearly when the upfront mkdir -p itself fails", async () => {
+    // Regression: previously, directory creation happened via sftpWrite's own
+    // best-effort SFTP mkdir loop with every error silently swallowed, so a
+    // genuine directory-creation failure surfaced only much later as an
+    // unrelated, unattributed "Failure" on whichever file wrote first into
+    // the missing directory. The upfront `mkdir -p` must fail immediately and
+    // explicitly instead.
+    execMock.mockImplementation((_c: unknown, cmd: string) => {
+      if (cmd.startsWith("mkdir -p")) {
+        return Promise.resolve({ code: 1, stdout: "", stderr: "Permission denied" });
+      }
+      return Promise.resolve(ok());
+    });
+    await startProvision(BASE);
+    const { status, lines } = await watchJob(provisionJobId("inst-1"));
+    expect(status).toBe("error");
+    expect(lines.some((l) => l.includes("mkdir -p") && l.includes("Permission denied"))).toBe(
+      true,
+    );
+    // Never reached a file write with directories in an unknown state.
     expect(sftpWriteMock).not.toHaveBeenCalled();
   });
 

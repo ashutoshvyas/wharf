@@ -200,6 +200,46 @@ async function runPipeline(
       );
 
       await runPhase(phaseOpts, "upload", async () => {
+        // The compose file bind-mounts Postgres init-scripts and Kong's
+        // declarative config from ./volumes/ (relative to the compose file).
+        // These are static — no per-instance secrets to inject, each
+        // container substitutes its own env at startup — so they are read
+        // once and uploaded verbatim on every provision/retry. Without them
+        // `db`'s bind-mount sources are missing and it never becomes healthy,
+        // which blocks every service that depends on it.
+        const staticFiles = await loadStaticVolumeFiles();
+        const realFiles = staticFiles.filter(
+          (f) => path.posix.basename(f.relPath) !== ".gitkeep",
+        );
+        // `.gitkeep` placeholders mark the empty directories (storage/
+        // snippets/functions) the compose file bind-mounts — no file content
+        // is needed on the remote host, only the directory.
+        const emptyDirs = staticFiles
+          .filter((f) => path.posix.basename(f.relPath) === ".gitkeep")
+          .map((f) => path.posix.dirname(f.relPath));
+
+        // Every directory this phase writes into, created up front with ONE
+        // explicit `mkdir -p` over exec — not sftpWrite's own best-effort SFTP
+        // mkdir loop, which silently swallows every mkdir error (including
+        // genuine ones) so a real failure there previously surfaced only much
+        // later, as an unrelated-looking write failure with no clue that the
+        // directory was never actually created. A single well-tested shell
+        // command, checked explicitly, removes that whole failure class.
+        const dirsNeeded = new Set<string>([
+          row.remotePath,
+          ...realFiles.map((f) => `${row.remotePath}/volumes/${path.posix.dirname(f.relPath)}`),
+          ...emptyDirs.map((d) => `${row.remotePath}/volumes/${d}`),
+        ]);
+        const mkdirRes = await exec(
+          conn,
+          `mkdir -p ${[...dirsNeeded].map((d) => `'${d}'`).join(" ")}`,
+        );
+        if (mkdirRes.code !== 0) {
+          throw new Error(
+            `mkdir -p for ${row.remotePath} failed (code ${mkdirRes.code}): ${mkdirRes.stderr.trim()}`,
+          );
+        }
+
         await sftpWrite(
           conn,
           `${row.remotePath}/docker-compose.yml`,
@@ -208,54 +248,18 @@ async function runPipeline(
         );
         await sftpWrite(conn, `${row.remotePath}/.env`, rendered.envFile, 0o600);
 
-        // The compose file bind-mounts Postgres init-scripts and Kong's
-        // declarative config from ./volumes/ (relative to the compose file).
-        // These are static — no per-instance secrets to inject, each
-        // container substitutes its own env at startup — so they are read
-        // once and uploaded verbatim on every provision/retry. Without them
-        // `db`'s bind-mount sources are missing and it never becomes healthy,
-        // which blocks every service that depends on it.
-        //
-        // `.gitkeep` placeholders (storage/snippets/functions — empty
-        // directories the compose file bind-mounts) are handled separately
-        // via a single `mkdir -p`: an SFTP write of zero-length content is an
-        // untested edge case worth avoiding outright, and it collapses three
-        // round-trips into one.
-        const staticFiles = await loadStaticVolumeFiles();
-        const emptyDirs = new Set<string>();
-        let uploaded = 0;
-        for (const file of staticFiles) {
-          if (path.posix.basename(file.relPath) === ".gitkeep") {
-            emptyDirs.add(path.posix.dirname(file.relPath));
-            continue;
-          }
+        for (const file of realFiles) {
           await sftpWrite(
             conn,
             `${row.remotePath}/volumes/${file.relPath}`,
             file.content,
             0o644,
           );
-          uploaded += 1;
           emit("info", `uploaded volumes/${file.relPath}`);
-        }
-        if (emptyDirs.size > 0) {
-          const dirs = [...emptyDirs].map(
-            (d) => `${row.remotePath}/volumes/${d}`,
-          );
-          const res = await exec(
-            conn,
-            `mkdir -p ${dirs.map((d) => `'${d}'`).join(" ")}`,
-          );
-          if (res.code !== 0) {
-            throw new Error(
-              `mkdir -p for empty volume dirs failed (code ${res.code}): ${res.stderr.trim()}`,
-            );
-          }
-          emit("info", `created ${dirs.length} empty volume dir(s)`);
         }
         emit(
           "info",
-          `uploaded docker-compose.yml + .env + ${uploaded} support file(s) to ${row.remotePath}`,
+          `uploaded docker-compose.yml + .env + ${realFiles.length} support file(s) to ${row.remotePath}`,
         );
       });
 
