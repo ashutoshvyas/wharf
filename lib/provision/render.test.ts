@@ -590,3 +590,20 @@ describe("renderInstanceCompose — Email templates", () => {
     ).rejects.toThrow(/line break/);
   });
 });
+
+describe("renderInstanceCompose — Vector buckets", () => {
+  it("is always on, with no input needed to enable it", async () => {
+    const { envFile } = await renderDoc();
+    expect(envValue(envFile, "VECTOR_ENABLED")).toBe("true");
+    expect(envValue(envFile, "VECTOR_BUCKET_PROVIDER")).toBe("pgvector");
+    expect(envValue(envFile, "VECTOR_DATABASE_CREATE")).toBe("true");
+    expect(envValue(envFile, "VECTOR_STORE_MIGRATIONS_ENABLED")).toBe("true");
+  });
+
+  it("builds a maintenance connection string using the postgres superuser, not supabase_storage_admin", async () => {
+    const { envFile } = await renderDoc();
+    expect(envValue(envFile, "VECTOR_DATABASE_URL")).toBe(
+      `postgres://postgres:${SECRETS.pgPassword}@db:5432/postgres`,
+    );
+  });
+});

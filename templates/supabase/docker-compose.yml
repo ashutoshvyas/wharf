@@ -442,6 +442,17 @@ services:
       # S3 protocol endpoint configuration
       S3_PROTOCOL_ACCESS_KEY_ID: ${S3_PROTOCOL_ACCESS_KEY_ID}
       S3_PROTOCOL_ACCESS_KEY_SECRET: ${S3_PROTOCOL_ACCESS_KEY_SECRET}
+
+      # Vector buckets (, pgvector backend) — always on, no per-instance
+      # toggle: this reuses the same Postgres container, so there's nothing
+      # to opt into. VECTOR_DATABASE_URL is a maintenance connection —
+      # storage-api itself runs CREATE DATABASE against it and derives its
+      # own storage_vectors database from the result.
+      VECTOR_ENABLED: ${VECTOR_ENABLED}
+      VECTOR_BUCKET_PROVIDER: ${VECTOR_BUCKET_PROVIDER}
+      VECTOR_DATABASE_URL: ${VECTOR_DATABASE_URL}
+      VECTOR_DATABASE_CREATE: ${VECTOR_DATABASE_CREATE}
+      VECTOR_STORE_MIGRATIONS_ENABLED: ${VECTOR_STORE_MIGRATIONS_ENABLED}
     volumes:
       - ./volumes/storage:/var/lib/storage:z
 
