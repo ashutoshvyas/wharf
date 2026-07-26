@@ -171,6 +171,22 @@ export interface EmailTemplateUpdateEntry {
   bodyHtml?: string;
 }
 
+/**
+ * GET/PATCH /api/db-instances/:id/analytics-settings — Storage
+ * Analytics buckets (Iceberg) on/off toggle. Nothing else to configure:
+ * MinIO/Lakekeeper's own secrets are all derived server-side, never
+ * operator-supplied.
+ */
+export interface AnalyticsSettingsDto {
+  enabled: boolean;
+}
+
+/** Returned alongside the DTO on PATCH — whether the compose reconcile succeeded. */
+export interface AnalyticsSettingsPatchResultDto extends AnalyticsSettingsDto {
+  applied: boolean;
+  applyError?: string;
+}
+
 /** Error carrying the HTTP status so callers can branch on 400 / 403 / 409. */
 export class ApiError extends Error {
   readonly status: number;
@@ -352,6 +368,28 @@ export async function fetchEmailTemplateBody(
   return apiFetch<EmailTemplateEditDto>(
     `/api/db-instances/${id}/email-template/${flow}/edit`,
     { cache: "no-store" },
+  );
+}
+
+export async function fetchAnalyticsSettings(id: string): Promise<AnalyticsSettingsDto> {
+  return apiFetch<AnalyticsSettingsDto>(`/api/db-instances/${id}/analytics-settings`, {
+    cache: "no-store",
+  });
+}
+
+/**
+ * Saves the toggle AND attempts to apply it (re-render + reconcile the
+ * instance's containers) in one call. `applied: false` means the toggle was
+ * still saved — only the server-side reconcile didn't take; see
+ * `applyError` for why.
+ */
+export async function updateAnalyticsSettings(
+  id: string,
+  enabled: boolean,
+): Promise<AnalyticsSettingsPatchResultDto> {
+  return apiFetch<AnalyticsSettingsPatchResultDto>(
+    `/api/db-instances/${id}/analytics-settings`,
+    jsonInit("PATCH", { enabled }),
   );
 }
 

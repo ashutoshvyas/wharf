@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { jwtVerify } from "jose";
 import {
+  deriveAnalyticsSecrets,
   deriveAncillarySecrets,
   generateAlphanumeric,
   generateInstanceSecrets,
   generateJwtSecret,
   generatePgPassword,
   JWT_SECRET_BYTES,
+  MINIO_ROOT_USER,
   PG_PASSWORD_LENGTH,
   signSupabaseKeys,
   TOKEN_ISSUER,
@@ -215,5 +217,47 @@ describe("deriveAncillarySecrets", () => {
 
   it("rejects a too-short secret", () => {
     expect(() => deriveAncillarySecrets("short")).toThrow(/at least 32/);
+  });
+});
+
+describe("deriveAnalyticsSecrets", () => {
+  it("is deterministic for a given jwtSecret", () => {
+    const secret = generateJwtSecret();
+    expect(deriveAnalyticsSecrets(secret)).toEqual(deriveAnalyticsSecrets(secret));
+  });
+
+  it("gives every instance distinct values", () => {
+    const a = deriveAnalyticsSecrets(generateJwtSecret());
+    const b = deriveAnalyticsSecrets(generateJwtSecret());
+    for (const key of Object.keys(a) as (keyof typeof a)[]) {
+      expect(a[key]).not.toBe(b[key]);
+    }
+  });
+
+  it("is domain-separated from deriveAncillarySecrets (same jwtSecret, different labels)", () => {
+    const secret = generateJwtSecret();
+    const analytics = deriveAnalyticsSecrets(secret);
+    const ancillary = deriveAncillarySecrets(secret);
+    const analyticsValues = Object.values(analytics);
+    const ancillaryValues = Object.values(ancillary);
+    for (const v of analyticsValues) expect(ancillaryValues).not.toContain(v);
+  });
+
+  it("produces alphanumeric-only values with sane lengths", () => {
+    const derived = deriveAnalyticsSecrets(generateJwtSecret());
+    expect(derived.minioRootPassword).toHaveLength(32);
+    expect(derived.icebergCatalogToken).toHaveLength(40);
+    expect(derived.lakekeeperPgEncryptionKey).toHaveLength(32);
+    for (const value of Object.values(derived)) expect(value).toMatch(ALPHANUMERIC_ONLY);
+  });
+
+  it("rejects a too-short secret", () => {
+    expect(() => deriveAnalyticsSecrets("short")).toThrow(/at least 32/);
+  });
+});
+
+describe("MINIO_ROOT_USER", () => {
+  it("is a fixed, non-empty constant", () => {
+    expect(MINIO_ROOT_USER).toBe("wharf-minio-root");
   });
 });

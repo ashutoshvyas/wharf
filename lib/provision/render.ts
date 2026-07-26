@@ -33,7 +33,12 @@ import {
   WHARF_STUDIO_FRAME_MIDDLEWARE,
 } from "@/lib/bootstrap/constants";
 import { isValidSlug, PROJECT_RE, subdomainsFor } from "./naming";
-import { deriveAncillarySecrets, type InstanceSecrets } from "./secrets";
+import {
+  deriveAnalyticsSecrets,
+  deriveAncillarySecrets,
+  MINIO_ROOT_USER,
+  type InstanceSecrets,
+} from "./secrets";
 
 /** Directory holding the vendored upstream template. */
 export const TEMPLATE_DIR = path.join("templates", "supabase");
@@ -91,6 +96,12 @@ export interface RenderInstanceInput {
   instanceId?: string;
   /** Panel's own public origin (env PANEL_URL) — see emailTemplates above. */
   panelUrl?: string;
+  /**
+   * Analytics buckets toggle. Absent (or `enabled: false`) renders
+   * ICEBERG_ENABLED=false and an empty COMPOSE_PROFILES, so MinIO/Lakekeeper
+   * stay defined-but-never-started — the default for every instance.
+   */
+  analyticsSettings?: AnalyticsSettingsValues;
 }
 
 /** The 6 GoTrue email flows a custom template/subject can be set for. */
@@ -169,6 +180,16 @@ export const DEFAULT_AUTH_SETTINGS: AuthSettingsValues = {
   azureEnabled: false,
   azureClientId: "",
   azureSecret: "",
+};
+
+/** Plain shape of one instance's Analytics-buckets toggle. */
+export interface AnalyticsSettingsValues {
+  enabled: boolean;
+}
+
+/** Off by default — MinIO/Lakekeeper are real extra containers, unlike Vector buckets. */
+export const DEFAULT_ANALYTICS_SETTINGS: AnalyticsSettingsValues = {
+  enabled: false,
 };
 
 export interface RenderedInstance {
@@ -452,6 +473,22 @@ async function renderEnv(
         ? `${panelOrigin}/api/db-instances/${input.instanceId}/email-template/${flow}`
         : "";
   }
+
+  // Analytics buckets (Iceberg) — opt-in per instance, off by
+  // default. MinIO's root password / the Iceberg catalog's static bearer
+  // token / Lakekeeper's own Postgres encryption key are all derived from
+  // this instance's jwtSecret (see deriveAnalyticsSecrets's doc comment for
+  // why), so nothing here needs its own stored secret.
+  const analytics = input.analyticsSettings ?? DEFAULT_ANALYTICS_SETTINGS;
+  const analyticsSecrets = deriveAnalyticsSecrets(input.secrets.jwtSecret);
+  Object.assign(values, {
+    ICEBERG_ENABLED: bool(analytics.enabled),
+    ICEBERG_CATALOG_AUTH_TOKEN: analyticsSecrets.icebergCatalogToken,
+    COMPOSE_PROFILES: analytics.enabled ? "analytics" : "",
+    MINIO_ROOT_USER,
+    MINIO_ROOT_PASSWORD: analyticsSecrets.minioRootPassword,
+    LAKEKEEPER_PG_ENCRYPTION_KEY: analyticsSecrets.lakekeeperPgEncryptionKey,
+  });
 
   let rendered = template;
   for (const [key, value] of Object.entries(values)) {
