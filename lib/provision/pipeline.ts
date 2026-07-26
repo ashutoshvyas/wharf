@@ -36,6 +36,7 @@ import { provisionJobId } from "./job-ids";
 import { composeProjectName, isValidSlug, remotePathFor, subdomainsFor } from "./naming";
 import { renderInstanceCompose } from "./render";
 import { generateInstanceSecrets } from "./secrets";
+import { loadStaticVolumeFiles } from "./static-volumes";
 
 /** The connection handle lib/ssh hands out (ssh2 Client, never imported here). */
 type SshConnection = Parameters<typeof exec>[0];
@@ -205,7 +206,27 @@ async function runPipeline(
           0o644,
         );
         await sftpWrite(conn, `${row.remotePath}/.env`, rendered.envFile, 0o600);
-        emit("info", `uploaded docker-compose.yml + .env to ${row.remotePath}`);
+
+        // The compose file bind-mounts Postgres init-scripts and Kong's
+        // declarative config from ./volumes/ (relative to the compose file).
+        // These are static — no per-instance secrets to inject, each
+        // container substitutes its own env at startup — so they are read
+        // once and uploaded verbatim on every provision/retry. Without them
+        // `db`'s bind-mount sources are missing and it never becomes healthy,
+        // which blocks every service that depends on it.
+        const staticFiles = await loadStaticVolumeFiles();
+        for (const file of staticFiles) {
+          await sftpWrite(
+            conn,
+            `${row.remotePath}/volumes/${file.relPath}`,
+            file.content,
+            0o644,
+          );
+        }
+        emit(
+          "info",
+          `uploaded docker-compose.yml + .env + ${staticFiles.length} support file(s) to ${row.remotePath}`,
+        );
       });
 
       await runPhase(phaseOpts, "start", async () => {

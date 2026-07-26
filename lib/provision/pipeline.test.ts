@@ -174,6 +174,14 @@ describe("startProvision — happy path", () => {
     expect(envCall?.[3]).toBe(0o600);
     expect(sftpWriteMock.mock.calls.some((c) => String(c[1]).endsWith("docker-compose.yml"))).toBe(true);
 
+    // Bugfix regression: db's Postgres init-scripts and Kong's declarative
+    // config MUST also be uploaded, or `db` never becomes healthy and
+    // everything depending on it refuses to start.
+    const uploaded = sftpWriteMock.mock.calls.map((c) => String(c[1]));
+    for (const f of ["volumes/db/jwt.sql", "volumes/db/roles.sql", "volumes/api/kong.yml"]) {
+      expect(uploaded.some((p) => p.endsWith(f))).toBe(true);
+    }
+
     // Secrets sealed (Uint8Array), status running.
     const final = instanceUpdate.mock.calls
       .map((c) => c[0] as { data?: Record<string, unknown> })
