@@ -27,7 +27,11 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { dump, load } from "js-yaml";
-import { TRAEFIK_NETWORK, WHARF_AUTH_MIDDLEWARE } from "@/lib/bootstrap/constants";
+import {
+  TRAEFIK_NETWORK,
+  WHARF_AUTH_MIDDLEWARE,
+  WHARF_STUDIO_FRAME_MIDDLEWARE,
+} from "@/lib/bootstrap/constants";
 import { isValidSlug, PROJECT_RE, subdomainsFor } from "./naming";
 import { deriveAncillarySecrets, type InstanceSecrets } from "./secrets";
 
@@ -112,7 +116,12 @@ export function kongLabels(project: string, apiSubdomain: string): string[] {
   ];
 }
 
-/** Traefik labels for the Studio router — identical to kong's plus the auth middleware. */
+/**
+ * Traefik labels for the Studio router — identical to kong's plus the auth
+ * middleware and the frame-allow middleware (the panel embeds Studio in an
+ * iframe, manage-view.tsx; Studio's own default frame-blocking headers would
+ * otherwise block that — see WHARF_STUDIO_FRAME_MIDDLEWARE).
+ */
 export function studioLabels(project: string, studioSubdomain: string): string[] {
   const router = `${project}-studio`;
   return [
@@ -120,7 +129,7 @@ export function studioLabels(project: string, studioSubdomain: string): string[]
     `traefik.http.routers.${router}.rule=Host(\`${studioSubdomain}\`)`,
     `traefik.http.routers.${router}.entrypoints=${TRAEFIK_ENTRYPOINT}`,
     `traefik.http.routers.${router}.tls.certresolver=${TRAEFIK_CERT_RESOLVER}`,
-    `traefik.http.routers.${router}.middlewares=${WHARF_AUTH_MIDDLEWARE}`,
+    `traefik.http.routers.${router}.middlewares=${WHARF_AUTH_MIDDLEWARE},${WHARF_STUDIO_FRAME_MIDDLEWARE}`,
     `traefik.http.services.${router}.loadbalancer.server.port=${STUDIO_CONTAINER_PORT}`,
   ];
 }

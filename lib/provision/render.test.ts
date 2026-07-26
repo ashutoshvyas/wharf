@@ -2,7 +2,11 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { load } from "js-yaml";
-import { TRAEFIK_NETWORK, WHARF_AUTH_MIDDLEWARE } from "@/lib/bootstrap/constants";
+import {
+  TRAEFIK_NETWORK,
+  WHARF_AUTH_MIDDLEWARE,
+  WHARF_STUDIO_FRAME_MIDDLEWARE,
+} from "@/lib/bootstrap/constants";
 import { deriveAncillarySecrets, type InstanceSecrets } from "./secrets";
 import {
   kongLabels,
@@ -59,21 +63,21 @@ describe("label sets", () => {
     ]);
   });
 
-  it("emits the exact studio label set, including the auth middleware", () => {
+  it("emits the exact studio label set, including the auth + frame middlewares", () => {
     expect(studioLabels("sb_4f2a", "studio-clienta.wharf.example.com")).toEqual([
       "traefik.enable=true",
       "traefik.http.routers.sb_4f2a-studio.rule=Host(`studio-clienta.wharf.example.com`)",
       "traefik.http.routers.sb_4f2a-studio.entrypoints=websecure",
       "traefik.http.routers.sb_4f2a-studio.tls.certresolver=letsencrypt",
-      "traefik.http.routers.sb_4f2a-studio.middlewares=wharf-auth@file",
+      "traefik.http.routers.sb_4f2a-studio.middlewares=wharf-auth@file,wharf-studio-frame@file",
       "traefik.http.services.sb_4f2a-studio.loadbalancer.server.port=3000",
     ]);
   });
 
-  it("takes the middleware name from lib/bootstrap/constants, never a literal", () => {
+  it("takes the middleware names from lib/bootstrap/constants, never a literal", () => {
     const labels = studioLabels("sb_4f2a", "studio-clienta.wharf.example.com");
     expect(labels).toContain(
-      `traefik.http.routers.sb_4f2a-studio.middlewares=${WHARF_AUTH_MIDDLEWARE}`,
+      `traefik.http.routers.sb_4f2a-studio.middlewares=${WHARF_AUTH_MIDDLEWARE},${WHARF_STUDIO_FRAME_MIDDLEWARE}`,
     );
   });
 });
@@ -96,7 +100,11 @@ describe("renderInstanceCompose — traefik wiring", () => {
     expect(kong.some((l) => l.includes("middlewares"))).toBe(false);
     expect(kong.join("\n")).not.toContain(WHARF_AUTH_MIDDLEWARE);
 
-    expect(studio.some((l) => l.endsWith(`.middlewares=${WHARF_AUTH_MIDDLEWARE}`))).toBe(true);
+    expect(
+      studio.some((l) =>
+        l.endsWith(`.middlewares=${WHARF_AUTH_MIDDLEWARE},${WHARF_STUDIO_FRAME_MIDDLEWARE}`),
+      ),
+    ).toBe(true);
   });
 
   it("enables traefik only on kong and studio", async () => {

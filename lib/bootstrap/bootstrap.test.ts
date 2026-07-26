@@ -23,7 +23,12 @@ vi.mock("@/lib/audit", () => ({ audit: (...a: unknown[]) => auditMock(...a) }));
 
 import { MAX_STEP_LINES, BOOTSTRAP_STEPS } from "./steps";
 import { renderTraefikTemplates, substitutePlaceholders, TRAEFIK_TEMPLATE_FILES } from "./templates";
-import { TRAEFIK_REMOTE_DIR, WHARF_AUTH_MIDDLEWARE, TRAEFIK_NETWORK } from "./constants";
+import {
+  TRAEFIK_REMOTE_DIR,
+  WHARF_AUTH_MIDDLEWARE,
+  WHARF_STUDIO_FRAME_MIDDLEWARE,
+  TRAEFIK_NETWORK,
+} from "./constants";
 import { bootstrapJobId, runBootstrap } from "./run";
 import { serverLockHolder, tryAcquireServerLock } from "@/lib/jobs/lock";
 import { subscribe } from "@/lib/jobs/stream";
@@ -69,6 +74,9 @@ describe("templates", () => {
     }
     const authFile = rendered.find((f) => f.relPath === "dynamic/wharf-auth.yml");
     expect(authFile?.content).toContain("https://panel.wharf.example.com/api/auth/verify");
+    // Studio embedding: the frame-allow middleware's CSP must name the panel
+    // itself, substituted the same as the forwardAuth address above.
+    expect(authFile?.content).toContain("frame-ancestors https://panel.wharf.example.com");
     const traefikYml = rendered.find((f) => f.relPath === "traefik.yml");
     expect(traefikYml?.content).toContain("ops@wharf.example.com");
   });
@@ -97,8 +105,9 @@ describe("templates", () => {
   it("checked-in templates carry the exact names provisioning will reference", async () => {
     const base = path.join(process.cwd(), "templates", "traefik");
     const auth = await readFile(path.join(base, "dynamic/wharf-auth.yml"), "utf8");
-    // The middleware key must match WHARF_AUTH_MIDDLEWARE ("wharf-auth@file").
+    // The middleware keys must match WHARF_AUTH_MIDDLEWARE / _FRAME_MIDDLEWARE.
     expect(auth).toContain(WHARF_AUTH_MIDDLEWARE.split("@")[0]!);
+    expect(auth).toContain(WHARF_STUDIO_FRAME_MIDDLEWARE.split("@")[0]!);
     const compose = await readFile(path.join(base, "docker-compose.yml"), "utf8");
     expect(compose).toContain(TRAEFIK_NETWORK);
     expect(compose).toContain("external: true");

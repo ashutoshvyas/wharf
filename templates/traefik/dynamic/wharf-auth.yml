@@ -1,12 +1,13 @@
-# WHARF forwardAuth middleware — rendered by lib/bootstrap
-# ({{PANEL_URL}} substituted from PANEL_URL) and uploaded to
-# /opt/wharf/traefik/dynamic/wharf-auth.yml. Studio routers reference it
-# as `wharf-auth@file` (lib/bootstrap/constants.ts) to gate
-# studio-{slug}.domain behind the panel session (architecture §4.5).
+# WHARF forwardAuth + Studio-framing middlewares — rendered by
+# lib/bootstrap ({{PANEL_URL}} substituted from PANEL_URL) and uploaded to
+# /opt/wharf/traefik/dynamic/wharf-auth.yml. Studio routers reference both
+# as `wharf-auth@file` / `wharf-studio-frame@file` (lib/bootstrap/constants.ts)
+# to gate studio-{slug}.domain behind the panel session and let the panel
+# embed it in an iframe (architecture §4.5, spec §6.3).
 #
 # Forward-compatible: the panel's /api/auth/verify endpoint ships in M5.
-# Until then the middleware fails closed — the panel returns a non-2xx for
-# the verify subrequest, so gated routers deny access rather than open up.
+# Until then wharf-auth fails closed — the panel returns a non-2xx for the
+# verify subrequest, so gated routers deny access rather than open up.
 http:
   middlewares:
     wharf-auth:
@@ -14,3 +15,19 @@ http:
         address: "{{PANEL_URL}}/api/auth/verify"
         authResponseHeaders:
           - X-Wharf-User
+    # Self-hosted Studio ships its own frame-blocking headers by default
+    # (X-Frame-Options / CSP frame-ancestors 'none') — confirmed live: the
+    # panel's Manage page iframe was blocked with "Framing '<studio url>'
+    # violates ... frame-ancestors 'none'" even after forwardAuth let the
+    # request through. Replace both with a policy that allows only the panel
+    # itself to frame it (Studio is only ever meant to be embedded there).
+    # customResponseHeaders REPLACES a same-named header from the backend
+    # rather than appending to it, so this fully supersedes whatever Studio
+    # sent — any other CSP directives Studio ships are not preserved, an
+    # accepted trade-off since Studio is only reachable at all through this
+    # forwardAuth-gated router in the first place.
+    wharf-studio-frame:
+      headers:
+        customResponseHeaders:
+          X-Frame-Options: ""
+          Content-Security-Policy: "frame-ancestors {{PANEL_URL}}"
