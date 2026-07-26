@@ -91,10 +91,17 @@ function deny(req: Request): Response {
   if (panelUrl) {
     const login = new URL(`${panelUrl}/login`);
     if (target) login.searchParams.set("returnTo", target);
-    // Traefik relays our response verbatim on a non-2xx, so a 401 carrying
-    // Location lands the browser on the panel login screen.
     headers.set("Location", login.toString());
+    // Traefik relays our response verbatim on a non-2xx, so this is what the
+    // browser actually receives — and a Location header only triggers
+    // navigation on a 3xx status. A 401 here (confirmed live) just renders as
+    // a bare "401 Unauthorized" page with the Location silently ignored; 302
+    // is a non-2xx (still a deny, as far as forwardAuth is concerned) that
+    // browsers do act on.
+    return new Response(null, { status: 302, headers });
   }
+  // No PANEL_URL configured — nowhere to send them, so there's nothing a
+  // redirect would achieve.
   return new Response(null, { status: 401, headers });
 }
 

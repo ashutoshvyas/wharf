@@ -49,7 +49,11 @@ describe("GET /api/auth/verify — Traefik forwardAuth gate", () => {
 
   it("denies a viewer — Studio can mutate data, panel viewers are read-only", async () => {
     const res = await GET(request(`${COOKIE}=${await session("viewer")}`));
-    expect(res.status).toBe(401);
+    // 302, not 401: a Location header only triggers browser navigation on a
+    // 3xx status — Traefik relays this response verbatim, so a 401 here would
+    // render as a bare error page instead of bouncing to the login screen
+    // (confirmed live).
+    expect(res.status).toBe(302);
     expect(res.headers.get("X-Wharf-User")).toBeNull();
   });
 
@@ -60,12 +64,12 @@ describe("GET /api/auth/verify — Traefik forwardAuth gate", () => {
     ["an empty token", `${COOKIE}=`],
   ])("denies %s", async (_label, cookie) => {
     const res = await GET(request(cookie));
-    expect(res.status).toBe(401);
+    expect(res.status).toBe(302);
   });
 
   it("denies an expired session", async () => {
     const res = await GET(request(`${COOKIE}=${await session("admin", { expired: true })}`));
-    expect(res.status).toBe(401);
+    expect(res.status).toBe(302);
   });
 
   it("denies a token signed with a different secret", async () => {
@@ -76,7 +80,7 @@ describe("GET /api/auth/verify — Traefik forwardAuth gate", () => {
       maxAge: 3600,
     });
     const res = await GET(request(`${COOKIE}=${foreign}`));
-    expect(res.status).toBe(401);
+    expect(res.status).toBe(302);
   });
 
   it("denies a token whose salt (cookie name) does not match", async () => {
@@ -88,7 +92,7 @@ describe("GET /api/auth/verify — Traefik forwardAuth gate", () => {
       maxAge: 3600,
     });
     const res = await GET(request(`${COOKIE}=${other}`));
-    expect(res.status).toBe(401);
+    expect(res.status).toBe(302);
   });
 
   it("accepts the __Secure- cookie variant", async () => {
@@ -105,6 +109,7 @@ describe("GET /api/auth/verify — Traefik forwardAuth gate", () => {
 
   it("sends the user back to the panel login with a returnTo on denial", async () => {
     const res = await GET(request());
+    expect(res.status).toBe(302);
     const location = res.headers.get("Location");
     expect(location).toBeTruthy();
     const url = new URL(location!);
@@ -114,10 +119,22 @@ describe("GET /api/auth/verify — Traefik forwardAuth gate", () => {
     );
   });
 
-  it("still denies (without Location) when forwarded headers are absent", async () => {
+  it("still redirects to login (without returnTo) when forwarded headers are absent", async () => {
     const bare = new Request("https://panel.wharf.example.com/api/auth/verify");
     const res = await GET(bare);
+    expect(res.status).toBe(302);
+    const location = res.headers.get("Location");
+    expect(location).toBeTruthy();
+    expect(new URL(location!).searchParams.has("returnTo")).toBe(false);
+  });
+
+  it("falls back to a bare 401 when PANEL_URL isn't configured — nowhere to redirect to", async () => {
+    const saved = process.env.PANEL_URL;
+    delete process.env.PANEL_URL;
+    const res = await GET(request());
+    process.env.PANEL_URL = saved;
     expect(res.status).toBe(401);
+    expect(res.headers.get("Location")).toBeNull();
   });
 
   it("drops returnTo instead of trusting it when x-forwarded-host is the panel's own host", async () => {
@@ -157,6 +174,6 @@ describe("GET /api/auth/verify — Traefik forwardAuth gate", () => {
     delete process.env.AUTH_SECRET;
     const res = await GET(request(`${COOKIE}=${await session("admin")}`));
     process.env.NEXTAUTH_SECRET = saved;
-    expect(res.status).toBe(401);
+    expect(res.status).toBe(302);
   });
 });
