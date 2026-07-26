@@ -151,7 +151,7 @@ export function ServersView({ role }: { role: Role }) {
                 <div className="mb-2.5 flex items-center justify-between gap-2.5">
                   <Link
                     href={`/servers/${s.id}`}
-                    className="truncate text-base font-semibold text-ink hover:text-cobalt-600"
+                    className="truncate text-base font-semibold text-cobalt-600 underline-offset-2 hover:underline"
                   >
                     {s.name}
                   </Link>
