@@ -47,12 +47,39 @@ function parseCookies(header: string | null): Map<string, string> {
 /**
  * Rebuild the URL the user actually asked for from Traefik's forwarded
  * headers, so login can bounce them back to Studio afterwards.
+ *
+ * SECURITY: x-forwarded-host/-uri reach us over two hops (Traefik's
+ * forwardAuth subrequest, then the panel's own reverse proxy in front of
+ * this app) — either one could hand us an attacker- or misconfiguration-
+ * supplied value, and this feeds straight into a Location header. Trust it
+ * only when the host is under our own INSTANCE_DOMAIN apex and isn't the
+ * panel's own host (the panel never legitimately reaches this endpoint via
+ * forwardAuth — only instance subdomains, studio- prefixed or bare, do);
+ * anything else is dropped rather than trusted, so this can never become an
+ * open redirect.
+ * (Found live: a reverse proxy in front of the panel unconditionally
+ * rewrote x-forwarded-host to its own $host before this route ever saw it,
+ * producing a returnTo that pointed at the panel's own root instead of the
+ * Studio subdomain the visitor actually asked for.)
  */
 function originalUrl(req: Request): string | null {
   const h = req.headers;
-  const proto = h.get("x-forwarded-proto") ?? "https";
   const host = h.get("x-forwarded-host") ?? h.get("x-forwarded-server");
   if (!host) return null;
+
+  const hostname = host.split(":")[0]!.toLowerCase();
+  const apex = (process.env.INSTANCE_DOMAIN ?? "").trim().toLowerCase();
+  const underApex = apex !== "" && (hostname === apex || hostname.endsWith(`.${apex}`));
+
+  let panelHost = "";
+  try {
+    panelHost = new URL(process.env.PANEL_URL ?? "").hostname.toLowerCase();
+  } catch {
+    panelHost = "";
+  }
+  if (!underApex || hostname === panelHost) return null;
+
+  const proto = h.get("x-forwarded-proto") ?? "https";
   const uri = h.get("x-forwarded-uri") ?? "/";
   return `${proto}://${host}${uri}`;
 }

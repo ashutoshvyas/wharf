@@ -9,6 +9,7 @@ const COOKIE = "wharf.session";
 beforeAll(() => {
   process.env.NEXTAUTH_SECRET = SECRET;
   process.env.PANEL_URL = "https://panel.wharf.example.com";
+  process.env.INSTANCE_DOMAIN = "wharf.example.com";
 });
 
 /** Mint a real Auth.js session token the way the panel does. */
@@ -117,6 +118,37 @@ describe("GET /api/auth/verify — Traefik forwardAuth gate", () => {
     const bare = new Request("https://panel.wharf.example.com/api/auth/verify");
     const res = await GET(bare);
     expect(res.status).toBe(401);
+  });
+
+  it("drops returnTo instead of trusting it when x-forwarded-host is the panel's own host", async () => {
+    // Exactly the bug seen live: a reverse proxy in front of the panel
+    // rewrote x-forwarded-host to its own $host before this route saw it.
+    const res = await GET(
+      request(undefined, { "x-forwarded-host": "panel.wharf.example.com" }),
+    );
+    const location = res.headers.get("Location");
+    expect(location).toBeTruthy();
+    expect(new URL(location!).searchParams.has("returnTo")).toBe(false);
+  });
+
+  it("drops returnTo instead of trusting it when x-forwarded-host is outside INSTANCE_DOMAIN", async () => {
+    // Would otherwise be an open redirect off the panel's own login screen.
+    const res = await GET(
+      request(undefined, { "x-forwarded-host": "evil.example.com" }),
+    );
+    const location = res.headers.get("Location");
+    expect(location).toBeTruthy();
+    expect(new URL(location!).searchParams.has("returnTo")).toBe(false);
+  });
+
+  it("accepts a bare instance API host (no studio- prefix) under INSTANCE_DOMAIN", async () => {
+    const res = await GET(
+      request(undefined, { "x-forwarded-host": "clienta.wharf.example.com" }),
+    );
+    const location = res.headers.get("Location");
+    expect(new URL(location!).searchParams.get("returnTo")).toBe(
+      "https://clienta.wharf.example.com/project/default/editor",
+    );
   });
 
   it("fails closed when NEXTAUTH_SECRET is missing", async () => {
