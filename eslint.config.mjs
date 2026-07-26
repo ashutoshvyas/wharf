@@ -44,6 +44,12 @@ const eslintConfig = [
     files: ["lib/ssh.ts", "gateway/**"],
     rules: { "no-restricted-imports": "off" },
   },
+  {
+    // CommonJS config files (pm2 requires .cjs, not ESM) — require() is the
+    // correct form here, not a TS-project import.
+    files: ["*.cjs", "**/*.cjs"],
+    rules: { "@typescript-eslint/no-require-imports": "off" },
+  },
 ];
 
 export default eslintConfig;
