@@ -217,6 +217,15 @@ export function NewInstanceModal({
               onTerminal={(status) => {
                 setFinished(status);
                 void queryClient.invalidateQueries({ queryKey: INSTANCES_QUERY_KEY });
+                // A successful provision may have just prepared the server
+                // for the first time (architecture §4.1) — refresh its
+                // cached query too, or its detail page (and the "Re-run
+                // setup" button) stays stale until something unrelated
+                // triggers a refetch.
+                if (status === "ok" && selected?.id) {
+                  void queryClient.invalidateQueries({ queryKey: ["server", selected.id] });
+                  void queryClient.invalidateQueries({ queryKey: ["servers"] });
+                }
                 toast({
                   title: status === "ok" ? "Provisioned" : undefined,
                   message:

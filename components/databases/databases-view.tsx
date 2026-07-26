@@ -208,6 +208,15 @@ export function DatabasesView({
         onTerminal={(instance, status) => {
           void queryClient.invalidateQueries({ queryKey: INSTANCES_QUERY_KEY });
           const removing = instance.status === "removing";
+          // A successful provision may have just prepared the server for the
+          // first time (architecture §4.1 — bootstrapped flips true on first
+          // instance). Without this, the server's own cached query (its
+          // detail page, the "Re-run setup" button's visibility) stays stale
+          // until something unrelated happens to refetch it.
+          if (!removing && status === "ok") {
+            void queryClient.invalidateQueries({ queryKey: ["server", instance.serverId] });
+            void queryClient.invalidateQueries({ queryKey: ["servers"] });
+          }
           toast({
             title: !removing && status === "ok" ? "Provisioned" : undefined,
             message: removing
