@@ -98,9 +98,10 @@ model DbInstance {
   createdAt          DateTime       @default(now()) @map("created_at")
   updatedAt          DateTime       @updatedAt @map("updated_at")
 
-  server       Server                 @relation(fields: [serverId], references: [id], onDelete: Restrict)
-  websites     Website[]
-  authSettings InstanceAuthSettings?
+  server        Server                  @relation(fields: [serverId], references: [id], onDelete: Restrict)
+  websites      Website[]
+  authSettings  InstanceAuthSettings?
+  emailTemplates InstanceEmailTemplate[]
 
   @@unique([serverId, remotePath])
   @@map("db_instances")
@@ -158,6 +159,49 @@ model InstanceAuthSettings {
   dbInstance DbInstance @relation(fields: [dbInstanceId], references: [id], onDelete: Cascade)
 
   @@map("instance_auth_settings")
+}
+
+/**
+ * The 6 GoTrue email flows a custom template/subject can be set for
+ *. Values match GoTrue's own GOTRUE_MAILER_*_<FLOW> env var
+ * suffixes uppercased (e.g. `magic_link` -> `MAGIC_LINK`).
+ */
+enum EmailTemplateFlow {
+  confirmation
+  recovery
+  magic_link
+  invite
+  email_change
+  reauthentication
+}
+
+/**
+ * Per-instance, per-flow email customization. Separate from
+ * InstanceAuthSettings because the shape is a list (one row per configured
+ * flow), not a flat settings bag — a flow with no row means "use GoTrue's
+ * own built-in default", not "explicitly reset to blank".
+ *
+ * `bodyHtml` is never written into the instance's .env (GoTrue fetches it
+ * over HTTP from GET /api/db-instances/:id/email-template/:flow — a public
+ * route, see that route's doc comment) and so needs no newline restriction,
+ * unlike every .env-bound string elsewhere in this schema. `subject` DOES
+ * go into .env as GOTRUE_MAILER_SUBJECTS_<FLOW> and is restricted the same
+ * way at the API boundary (lib/instances/auth-settings-schema.ts).
+ */
+model InstanceEmailTemplate {
+  id           String            @id @default(uuid())
+  dbInstanceId String            @map("db_instance_id")
+  flow         EmailTemplateFlow
+  subject      String?
+  bodyHtml     String?           @map("body_html") @db.Text
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  dbInstance DbInstance @relation(fields: [dbInstanceId], references: [id], onDelete: Cascade)
+
+  @@unique([dbInstanceId, flow])
+  @@map("instance_email_templates")
 }
 
 model PanelUser {

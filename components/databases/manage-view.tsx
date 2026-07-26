@@ -27,11 +27,12 @@ import { cn } from "@/lib/cn";
 import type { Role } from "@/lib/rbac";
 import type { InstanceDto } from "./api";
 import { AuthSettingsForm } from "./auth-settings-form";
+import { EmailTemplatesForm } from "./email-templates-form";
 
 /** How long to wait for the iframe's load event before offering the fallback. */
 const LOAD_TIMEOUT_MS = 12_000;
 
-type Tab = "studio" | "auth";
+type Tab = "studio" | "auth" | "email-templates";
 
 const TAB_CLASSES =
   "rounded-[6px] px-2.5 py-1 text-[12.5px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cobalt-400";
@@ -87,6 +88,18 @@ export function ManageView({ instance, role }: { instance: InstanceDto; role: Ro
           >
             Auth settings
           </button>
+          <button
+            type="button"
+            onClick={() => setTab("email-templates")}
+            className={cn(
+              TAB_CLASSES,
+              tab === "email-templates"
+                ? "bg-white text-ink shadow-sm"
+                : "text-neutral-500 hover:text-ink",
+            )}
+          >
+            Email templates
+          </button>
         </div>
         {tab === "studio" ? (
           <span className="truncate font-mono text-xs text-neutral-400 max-md:hidden">
@@ -111,6 +124,10 @@ export function ManageView({ instance, role }: { instance: InstanceDto; role: Ro
       {tab === "auth" ? (
         <div className="min-h-0 flex-1 overflow-y-auto bg-neutral-50">
           <AuthSettingsForm instance={instance} role={role} />
+        </div>
+      ) : tab === "email-templates" ? (
+        <div className="min-h-0 flex-1 overflow-y-auto bg-neutral-50">
+          <EmailTemplatesForm instance={instance} role={role} />
         </div>
       ) : blocked ? (
         <div className="flex flex-1 items-center justify-center bg-neutral-50 p-6">

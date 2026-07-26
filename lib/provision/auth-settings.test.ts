@@ -27,7 +27,7 @@ vi.mock("./render", async (importOriginal) => {
   };
 });
 
-import { applyAuthSettings, decryptAuthSettings } from "./auth-settings";
+import { applyAuthSettings, decryptAuthSettings, toEmailTemplateValues } from "./auth-settings";
 import { DEFAULT_AUTH_SETTINGS, type AuthSettingsValues } from "./render";
 import { serverLockHolder, tryAcquireServerLock } from "@/lib/jobs/lock";
 
@@ -170,5 +170,38 @@ describe("applyAuthSettings", () => {
       /docker compose up -d auth failed/,
     );
     expect(serverLockHolder("srv-1")).toBeNull();
+  });
+
+  it("threads emailTemplates through to the render call, and PANEL_URL for the serving URL", async () => {
+    process.env.PANEL_URL = "https://wharf.example.com";
+    const templates = toEmailTemplateValues([
+      { flow: "confirmation", subject: "Confirm", bodyHtml: "<p>hi</p>" },
+      { flow: "recovery", subject: "", bodyHtml: null },
+    ]);
+    await applyAuthSettings("inst-1", SETTINGS, templates);
+    expect(renderMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        instanceId: "inst-1",
+        panelUrl: "https://wharf.example.com",
+        emailTemplates: [
+          { flow: "confirmation", subject: "Confirm", hasBody: true },
+          { flow: "recovery", subject: "", hasBody: false },
+        ],
+      }),
+    );
+  });
+});
+
+describe("toEmailTemplateValues", () => {
+  it("derives hasBody from whether bodyHtml is set, passes subject through as-is", () => {
+    expect(
+      toEmailTemplateValues([
+        { flow: "invite", subject: "You're invited", bodyHtml: "<p>x</p>" },
+        { flow: "magic_link", subject: null, bodyHtml: null },
+      ]),
+    ).toEqual([
+      { flow: "invite", subject: "You're invited", hasBody: true },
+      { flow: "magic_link", subject: "", hasBody: false },
+    ]);
   });
 });

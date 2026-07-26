@@ -95,6 +95,11 @@ const PUBLIC_PATHS = [
   // The token itself is the credential (single-use, 48h, hashed at rest).
   /^\/invite(\/|$)/,
   /^\/api\/users\/set-password$/,
+  // Fetched by GoTrue itself (a machine, no session cookie) at container
+  // startup to load a custom email template body — necessarily
+  // unauthenticated, the same category of exception as /api/auth/verify.
+  // Only ever returns template HTML, never any other instance field.
+  /^\/api\/db-instances\/[^/]+\/email-template\/[^/]+$/,
 ];
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);

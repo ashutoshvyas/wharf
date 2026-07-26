@@ -19,18 +19,35 @@
  * 409 {error}   the target server's single-flight lock is held (PATCH only)
  */
 import { NextResponse } from "next/server";
-import type { Prisma } from "@prisma/client";
+import type { InstanceEmailTemplate, Prisma } from "@prisma/client";
 import { apiError, requireApiRole, withErrorHandling } from "@/lib/api-helpers";
 import { audit } from "@/lib/audit";
 import { prisma } from "@/lib/db";
 import { authSettingsUpdateSchema } from "@/lib/instances/auth-settings-schema";
 import { applyAuthSettings, decryptAuthSettings } from "@/lib/provision/auth-settings";
-import { DEFAULT_AUTH_SETTINGS, type AuthSettingsValues } from "@/lib/provision/render";
+import {
+  DEFAULT_AUTH_SETTINGS,
+  EMAIL_TEMPLATE_FLOWS,
+  type AuthSettingsValues,
+  type EmailTemplateValues,
+} from "@/lib/provision/render";
 import { sealBytes } from "@/lib/servers/seal-bytes";
 
 type Ctx = { params: Promise<{ id: string }> };
 
-function toDto(row: Awaited<ReturnType<typeof prisma.instanceAuthSettings.findUnique>>) {
+/** Always all 6 flows, even ones never configured — the form needs the full picture. */
+function emailTemplatesDto(rows: Pick<InstanceEmailTemplate, "flow" | "subject" | "bodyHtml">[]) {
+  const byFlow = new Map(rows.map((r) => [r.flow, r]));
+  return EMAIL_TEMPLATE_FLOWS.map((flow) => {
+    const row = byFlow.get(flow);
+    return { flow, subject: row?.subject ?? "", hasBody: !!row?.bodyHtml };
+  });
+}
+
+function toDto(
+  row: Awaited<ReturnType<typeof prisma.instanceAuthSettings.findUnique>>,
+  templateRows: Pick<InstanceEmailTemplate, "flow" | "subject" | "bodyHtml">[],
+) {
   const values = decryptAuthSettings(row);
   return {
     disableSignup: values.disableSignup,
@@ -55,6 +72,7 @@ function toDto(row: Awaited<ReturnType<typeof prisma.instanceAuthSettings.findUn
     azureEnabled: values.azureEnabled,
     azureClientId: values.azureClientId,
     azureSecretConfigured: values.azureSecret !== "",
+    emailTemplates: emailTemplatesDto(templateRows),
   };
 }
 
@@ -68,10 +86,16 @@ export const GET = withErrorHandling(async (_req: Request, { params }: Ctx) => {
   });
   if (!instance) return apiError(404, "Database instance not found");
 
-  const settings = await prisma.instanceAuthSettings.findUnique({
-    where: { dbInstanceId: id },
+  const [settings, templateRows] = await Promise.all([
+    prisma.instanceAuthSettings.findUnique({ where: { dbInstanceId: id } }),
+    prisma.instanceEmailTemplate.findMany({
+      where: { dbInstanceId: id },
+      select: { flow: true, subject: true, bodyHtml: true },
+    }),
+  ]);
+  return NextResponse.json(toDto(settings, templateRows), {
+    headers: { "Cache-Control": "no-store" },
   });
-  return NextResponse.json(toDto(settings), { headers: { "Cache-Control": "no-store" } });
 });
 
 export const PATCH = withErrorHandling(async (req: Request, { params }: Ctx) => {
@@ -90,14 +114,32 @@ export const PATCH = withErrorHandling(async (req: Request, { params }: Ctx) => 
   }
   const body = authSettingsUpdateSchema.parse(raw);
 
-  const existingRow = await prisma.instanceAuthSettings.findUnique({
-    where: { dbInstanceId: id },
-  });
+  const [existingRow, existingTemplateRows] = await Promise.all([
+    prisma.instanceAuthSettings.findUnique({ where: { dbInstanceId: id } }),
+    prisma.instanceEmailTemplate.findMany({ where: { dbInstanceId: id } }),
+  ]);
   // Field names in `body` (post schema transform) match AuthSettingsValues'
   // own field names exactly (smtpPass, googleSecret, ...) — spreading only
   // overrides what was actually provided, same "sparse merge" the DB update
   // below performs.
   const prospective: AuthSettingsValues = { ...decryptAuthSettings(existingRow), ...body };
+
+  // Full state of all 6 flows, not just whichever ones this request touches:
+  // applyAuthSettings re-renders the .env from scratch, so any flow left out
+  // here would silently lose its configured template on an unrelated change
+  // (e.g. toggling an OAuth provider without touching emailTemplates at all).
+  // Per-flow "omitted field = keep existing, explicit value = overwrite" —
+  // unlike the secret-field "empty string = keep" convention used elsewhere
+  // in this route, since subject/bodyHtml are never secrets.
+  const templateOverrides = new Map((body.emailTemplates ?? []).map((t) => [t.flow, t]));
+  const existingTemplatesByFlow = new Map(existingTemplateRows.map((r) => [r.flow, r]));
+  const prospectiveTemplates: EmailTemplateValues[] = EMAIL_TEMPLATE_FLOWS.map((flow) => {
+    const override = templateOverrides.get(flow);
+    const existing = existingTemplatesByFlow.get(flow);
+    const subject = override?.subject ?? existing?.subject ?? "";
+    const bodyHtml = override?.bodyHtml ?? existing?.bodyHtml ?? "";
+    return { flow, subject, hasBody: !!bodyHtml };
+  });
 
   // Apply BEFORE persisting: a busy server-lock conflict must leave no
   // trace, matching every other busy-conflict route in this codebase
@@ -105,7 +147,7 @@ export const PATCH = withErrorHandling(async (req: Request, { params }: Ctx) => 
   let applied = true;
   let applyError: string | undefined;
   try {
-    const result = await applyAuthSettings(id, prospective);
+    const result = await applyAuthSettings(id, prospective, prospectiveTemplates);
     if ("busy" in result) {
       return apiError(409, `Server is busy — a '${result.busy}' job is running.`);
     }
@@ -154,6 +196,29 @@ export const PATCH = withErrorHandling(async (req: Request, { params }: Ctx) => 
     update: data,
   });
 
+  // Only touch rows for flows this request actually mentioned — untouched
+  // flows already carried forward correctly into `prospectiveTemplates`
+  // above without needing a DB write.
+  if (body.emailTemplates) {
+    await Promise.all(
+      body.emailTemplates.map((t) =>
+        prisma.instanceEmailTemplate.upsert({
+          where: { dbInstanceId_flow: { dbInstanceId: id, flow: t.flow } },
+          create: {
+            dbInstanceId: id,
+            flow: t.flow,
+            subject: t.subject ?? null,
+            bodyHtml: t.bodyHtml ?? null,
+          },
+          update: {
+            ...(t.subject !== undefined ? { subject: t.subject } : {}),
+            ...(t.bodyHtml !== undefined ? { bodyHtml: t.bodyHtml } : {}),
+          },
+        }),
+      ),
+    );
+  }
+
   await audit({
     userId: session.user.id,
     userEmail: session.user.email,
@@ -163,8 +228,19 @@ export const PATCH = withErrorHandling(async (req: Request, { params }: Ctx) => 
     metadata: { fields: Object.keys(body), applied },
   });
 
+  const updatedTemplateRows: Pick<InstanceEmailTemplate, "flow" | "subject" | "bodyHtml">[] =
+    EMAIL_TEMPLATE_FLOWS.map((flow) => {
+      const override = templateOverrides.get(flow);
+      const existing = existingTemplatesByFlow.get(flow);
+      return {
+        flow,
+        subject: override?.subject ?? existing?.subject ?? null,
+        bodyHtml: override?.bodyHtml ?? existing?.bodyHtml ?? null,
+      };
+    });
+
   return NextResponse.json({
-    ...toDto(settings),
+    ...toDto(settings, updatedTemplateRows),
     applied,
     ...(applyError ? { applyError } : {}),
   });

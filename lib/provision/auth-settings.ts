@@ -14,12 +14,17 @@
  * pattern used by provision/restore/remove, since this completes in a few
  * seconds rather than minutes.
  */
-import type { InstanceAuthSettings } from "@prisma/client";
+import type { InstanceAuthSettings, InstanceEmailTemplate } from "@prisma/client";
 import { open } from "@/lib/crypto";
 import { prisma } from "@/lib/db";
 import { serverLockHolder, tryAcquireServerLock } from "@/lib/jobs/lock";
 import { exec, sftpWrite, withConnection } from "@/lib/ssh";
-import { DEFAULT_AUTH_SETTINGS, renderInstanceCompose, type AuthSettingsValues } from "./render";
+import {
+  DEFAULT_AUTH_SETTINGS,
+  renderInstanceCompose,
+  type AuthSettingsValues,
+  type EmailTemplateValues,
+} from "./render";
 
 /** The connection handle lib/ssh hands out (ssh2 Client, never imported here). */
 type SshConnection = Parameters<typeof exec>[0];
@@ -59,6 +64,23 @@ export function decryptAuthSettings(row: InstanceAuthSettings | null): AuthSetti
   };
 }
 
+/**
+ * Map stored email-template rows to the plain shape render.ts
+ * consumes. Subjects come through as-is (not encrypted); `hasBody` is
+ * derived from whether bodyHtml was actually set, since the row's own
+ * content isn't needed here — render.ts only needs to know whether to
+ * point GOTRUE_MAILER_TEMPLATES_<FLOW> at the serving URL at all.
+ */
+export function toEmailTemplateValues(
+  rows: Pick<InstanceEmailTemplate, "flow" | "subject" | "bodyHtml">[],
+): EmailTemplateValues[] {
+  return rows.map((row) => ({
+    flow: row.flow,
+    subject: row.subject ?? "",
+    hasBody: !!row.bodyHtml,
+  }));
+}
+
 export type ApplyAuthSettingsResult = { ok: true } | { busy: string };
 
 /**
@@ -75,6 +97,7 @@ export type ApplyAuthSettingsResult = { ok: true } | { busy: string };
 export async function applyAuthSettings(
   instanceId: string,
   settings: AuthSettingsValues,
+  emailTemplates?: EmailTemplateValues[],
 ): Promise<ApplyAuthSettingsResult> {
   const instance = await prisma.dbInstance.findFirst({
     where: { id: instanceId, deletedAt: null },
@@ -110,6 +133,9 @@ export async function applyAuthSettings(
       },
       remotePath: instance.remotePath,
       authSettings: settings,
+      emailTemplates,
+      instanceId: instance.id,
+      panelUrl: process.env.PANEL_URL,
     });
 
     await withConnection(instance.serverId, async (conn: SshConnection) => {

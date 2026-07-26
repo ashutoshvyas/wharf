@@ -13,12 +13,34 @@
  * risk lib/provision/render.ts's validateInput() already guards against for
  * generated secrets — this is the same check at the API boundary, so bad
  * input gets a clean 400 instead of surfacing as a 500 from render.ts).
+ *
+ * `emailTemplates` is the one exception to both rules above:
+ * `bodyHtml` is never written into .env at all (it's served over its own
+ * HTTP route, see app/api/db-instances/[id]/email-template/[flow]/route.ts)
+ * so it must allow multi-line content, and neither field is a secret, so
+ * there's no "empty means keep existing" — an omitted field per-flow keeps
+ * the stored value, but an explicitly empty one clears it.
  */
 import { z } from "zod";
 
 const NO_LINEBREAK_RE = /^[^\r\n]*$/;
 const noLineBreak = (label: string) =>
   z.string().max(1024).regex(NO_LINEBREAK_RE, `${label} must not contain line breaks`);
+
+// Mirrors lib/provision/render.ts's EMAIL_TEMPLATE_FLOWS — kept as a literal
+// tuple here (rather than imported) so z.enum can narrow the type properly.
+const emailTemplateEntrySchema = z.object({
+  flow: z.enum([
+    "confirmation",
+    "recovery",
+    "magic_link",
+    "invite",
+    "email_change",
+    "reauthentication",
+  ]),
+  subject: noLineBreak("subject").optional(),
+  bodyHtml: z.string().max(100_000).optional(),
+});
 
 export const authSettingsUpdateSchema = z
   .object({
@@ -49,6 +71,22 @@ export const authSettingsUpdateSchema = z
     azureEnabled: z.boolean().optional(),
     azureClientId: noLineBreak("azureClientId").optional(),
     azureSecret: z.string().max(1024).optional(),
+
+    emailTemplates: z.array(emailTemplateEntrySchema).max(6).optional(),
+  })
+  .superRefine((v, ctx) => {
+    if (!v.emailTemplates) return;
+    const seen = new Set<string>();
+    for (const entry of v.emailTemplates) {
+      if (seen.has(entry.flow)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["emailTemplates"],
+          message: `duplicate flow '${entry.flow}' in emailTemplates`,
+        });
+      }
+      seen.add(entry.flow);
+    }
   })
   .transform(({ smtpPass, googleSecret, githubSecret, azureSecret, ...rest }) => ({
     ...rest,

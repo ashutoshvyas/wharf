@@ -528,3 +528,65 @@ describe("renderInstanceCompose — Auth settings", () => {
     ).rejects.toThrow(/line break/);
   });
 });
+
+describe("renderInstanceCompose — Email templates", () => {
+  it("renders every flow empty when emailTemplates is absent — matches today exactly", async () => {
+    const { envFile } = await renderDoc();
+    for (const suffix of [
+      "CONFIRMATION",
+      "RECOVERY",
+      "MAGIC_LINK",
+      "INVITE",
+      "EMAIL_CHANGE",
+      "REAUTHENTICATION",
+    ]) {
+      expect(envValue(envFile, `MAILER_SUBJECTS_${suffix}`)).toBe("");
+      expect(envValue(envFile, `MAILER_TEMPLATES_${suffix}`)).toBe("");
+    }
+  });
+
+  it("sets the subject but leaves the template URL empty when hasBody is false", async () => {
+    const { envFile } = await renderDoc({
+      instanceId: "inst-1",
+      panelUrl: "https://wharf.example.com",
+      emailTemplates: [
+        { flow: "confirmation", subject: "Confirm your email", hasBody: false },
+      ],
+    });
+    expect(envValue(envFile, "MAILER_SUBJECTS_CONFIRMATION")).toBe("Confirm your email");
+    expect(envValue(envFile, "MAILER_TEMPLATES_CONFIRMATION")).toBe("");
+  });
+
+  it("builds the template URL from instanceId + panelUrl when hasBody is true", async () => {
+    const { envFile } = await renderDoc({
+      instanceId: "inst-1",
+      panelUrl: "https://wharf.example.com/",
+      emailTemplates: [
+        { flow: "magic_link", subject: "Your magic link", hasBody: true },
+      ],
+    });
+    expect(envValue(envFile, "MAILER_SUBJECTS_MAGIC_LINK")).toBe("Your magic link");
+    expect(envValue(envFile, "MAILER_TEMPLATES_MAGIC_LINK")).toBe(
+      "https://wharf.example.com/api/db-instances/inst-1/email-template/magic_link",
+    );
+    // Trailing slash on panelUrl must not produce a double slash.
+    expect(envValue(envFile, "MAILER_TEMPLATES_MAGIC_LINK")).not.toContain("//api");
+  });
+
+  it("leaves the template URL empty when hasBody is true but instanceId/panelUrl are missing", async () => {
+    const { envFile } = await renderDoc({
+      emailTemplates: [{ flow: "invite", subject: "", hasBody: true }],
+    });
+    expect(envValue(envFile, "MAILER_TEMPLATES_INVITE")).toBe("");
+  });
+
+  it("rejects a subject containing a line break, but allows one in a sibling field unaffected", async () => {
+    await expect(
+      renderDoc({
+        emailTemplates: [
+          { flow: "recovery", subject: "line1\nEVIL=1", hasBody: false },
+        ],
+      }),
+    ).rejects.toThrow(/line break/);
+  });
+});

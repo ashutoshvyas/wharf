@@ -79,6 +79,44 @@ export interface RenderInstanceInput {
    * hardcoded, so behavior is unchanged until an operator sets something.
    */
   authSettings?: AuthSettingsValues;
+  /**
+   * Per-flow email subject/template overrides. `instanceId` +
+   * `panelUrl` are only needed to construct the MAILER_TEMPLATES_<FLOW> URL
+   * (GET /api/db-instances/:id/email-template/:flow) for a flow that has a
+   * custom body — omit all three and every flow renders exactly today's
+   * "unconfigured" defaults (empty subject, no template URL).
+   */
+  emailTemplates?: EmailTemplateValues[];
+  /** DB id of the instance being rendered — see emailTemplates above. */
+  instanceId?: string;
+  /** Panel's own public origin (env PANEL_URL) — see emailTemplates above. */
+  panelUrl?: string;
+}
+
+/** The 6 GoTrue email flows a custom template/subject can be set for. */
+export type EmailTemplateFlow =
+  | "confirmation"
+  | "recovery"
+  | "magic_link"
+  | "invite"
+  | "email_change"
+  | "reauthentication";
+
+export const EMAIL_TEMPLATE_FLOWS: readonly EmailTemplateFlow[] = [
+  "confirmation",
+  "recovery",
+  "magic_link",
+  "invite",
+  "email_change",
+  "reauthentication",
+];
+
+export interface EmailTemplateValues {
+  flow: EmailTemplateFlow;
+  /** Plain string — goes into .env, so subject to the same newline restriction as any other field there. */
+  subject: string;
+  /** Whether a custom body is stored for this flow (the URL is only set when true). */
+  hasBody: boolean;
 }
 
 /** Plain (decrypted) shape of one instance's admin-configurable Auth settings. */
@@ -238,6 +276,18 @@ function validateInput(input: RenderInstanceInput): void {
       }
     }
   }
+  // Email template subjects go into .env too — same restriction.
+  // bodyHtml is deliberately NOT checked here: it never touches .env (it's
+  // served over its own HTTP route) and must allow multi-line content.
+  if (input.emailTemplates) {
+    for (const entry of input.emailTemplates) {
+      if (/[\r\n]/.test(entry.subject)) {
+        throw new Error(
+          `Email template subject for '${entry.flow}' contains a line break, which cannot be written to a .env.`,
+        );
+      }
+    }
+  }
 }
 
 /** Attach `network` to a service, preserving any existing per-network config. */
@@ -386,6 +436,22 @@ async function renderEnv(
     AZURE_CLIENT_ID: auth.azureClientId,
     AZURE_SECRET: auth.azureSecret,
   });
+
+  // per-flow email subject/template overrides. A flow with no entry
+  // (or no instanceId/panelUrl to build the URL from) renders both vars
+  // empty — GoTrue treats empty exactly like unset, falling back to its own
+  // built-in default (confirmed; see the module doc for this feature).
+  const templatesByFlow = new Map((input.emailTemplates ?? []).map((e) => [e.flow, e]));
+  const panelOrigin = input.panelUrl?.replace(/\/+$/, "");
+  for (const flow of EMAIL_TEMPLATE_FLOWS) {
+    const entry = templatesByFlow.get(flow);
+    const suffix = flow.toUpperCase();
+    values[`MAILER_SUBJECTS_${suffix}`] = entry?.subject ?? "";
+    values[`MAILER_TEMPLATES_${suffix}`] =
+      entry?.hasBody && input.instanceId && panelOrigin
+        ? `${panelOrigin}/api/db-instances/${input.instanceId}/email-template/${flow}`
+        : "";
+  }
 
   let rendered = template;
   for (const [key, value] of Object.entries(values)) {

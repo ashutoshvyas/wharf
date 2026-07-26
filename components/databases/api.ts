@@ -105,6 +105,7 @@ export interface AuthSettingsDto {
   azureEnabled: boolean;
   azureClientId: string;
   azureSecretConfigured: boolean;
+  emailTemplates: EmailTemplateSummaryDto[];
 }
 
 /** PATCH-only: leave a secret field undefined to keep the stored value. */
@@ -131,12 +132,43 @@ export interface AuthSettingsUpdatePayload {
   azureEnabled?: boolean;
   azureClientId?: string;
   azureSecret?: string;
+  emailTemplates?: EmailTemplateUpdateEntry[];
 }
 
 /** Returned alongside the DTO on PATCH — whether the auth container restart succeeded. */
 export interface AuthSettingsPatchResultDto extends AuthSettingsDto {
   applied: boolean;
   applyError?: string;
+}
+
+/** Mirrors lib/provision/render.ts's EMAIL_TEMPLATE_FLOWS. */
+export type EmailTemplateFlow =
+  | "confirmation"
+  | "recovery"
+  | "magic_link"
+  | "invite"
+  | "email_change"
+  | "reauthentication";
+
+/** Per-flow summary embedded in AuthSettingsDto — never the full HTML body. */
+export interface EmailTemplateSummaryDto {
+  flow: EmailTemplateFlow;
+  subject: string;
+  hasBody: boolean;
+}
+
+/** GET /api/db-instances/:id/email-template/:flow/edit — one flow's full body. */
+export interface EmailTemplateEditDto {
+  flow: EmailTemplateFlow;
+  subject: string;
+  bodyHtml: string;
+}
+
+/** PATCH entry: per-flow "omitted = keep existing, explicit = overwrite". */
+export interface EmailTemplateUpdateEntry {
+  flow: EmailTemplateFlow;
+  subject?: string;
+  bodyHtml?: string;
 }
 
 /** Error carrying the HTTP status so callers can branch on 400 / 403 / 409. */
@@ -306,6 +338,20 @@ export async function updateAuthSettings(
   return apiFetch<AuthSettingsPatchResultDto>(
     `/api/db-instances/${id}/auth-settings`,
     jsonInit("PATCH", payload),
+  );
+}
+
+/**
+ * Loads one flow's full stored HTML body on demand (the auth-settings GET
+ * only returns `hasBody`/`subject` per flow, to keep that payload small).
+ */
+export async function fetchEmailTemplateBody(
+  id: string,
+  flow: EmailTemplateFlow,
+): Promise<EmailTemplateEditDto> {
+  return apiFetch<EmailTemplateEditDto>(
+    `/api/db-instances/${id}/email-template/${flow}/edit`,
+    { cache: "no-store" },
   );
 }
 

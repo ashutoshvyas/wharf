@@ -61,4 +61,71 @@ describe("authSettingsUpdateSchema", () => {
     expect(authSettingsUpdateSchema.safeParse({ smtpPort: 70_000 }).success).toBe(false);
     expect(authSettingsUpdateSchema.safeParse({ smtpPort: 587 }).success).toBe(true);
   });
+
+  describe("emailTemplates", () => {
+    it("accepts a well-formed entry with subject and multi-line bodyHtml", () => {
+      const out = authSettingsUpdateSchema.parse({
+        emailTemplates: [
+          { flow: "confirmation", subject: "Confirm your signup", bodyHtml: "<p>line1\nline2</p>" },
+        ],
+      });
+      expect(out.emailTemplates).toEqual([
+        { flow: "confirmation", subject: "Confirm your signup", bodyHtml: "<p>line1\nline2</p>" },
+      ]);
+    });
+
+    it("rejects a line break in subject (.env injection guard, unlike bodyHtml)", () => {
+      expect(
+        authSettingsUpdateSchema.safeParse({
+          emailTemplates: [{ flow: "confirmation", subject: "line1\nEVIL=1" }],
+        }).success,
+      ).toBe(false);
+      expect(
+        authSettingsUpdateSchema.safeParse({
+          emailTemplates: [{ flow: "confirmation", subject: "line1\rEVIL=1" }],
+        }).success,
+      ).toBe(false);
+    });
+
+    it("allows multi-line bodyHtml — it's served over its own route, never written into .env", () => {
+      const html = "<html>\n<body>\n<p>{{ .ConfirmationURL }}</p>\n</body>\n</html>";
+      expect(
+        authSettingsUpdateSchema.safeParse({
+          emailTemplates: [{ flow: "recovery", bodyHtml: html }],
+        }).success,
+      ).toBe(true);
+    });
+
+    it("rejects an unknown flow", () => {
+      expect(
+        authSettingsUpdateSchema.safeParse({
+          emailTemplates: [{ flow: "not-a-real-flow", subject: "x" }],
+        }).success,
+      ).toBe(false);
+    });
+
+    it("rejects a duplicate flow within the same array", () => {
+      expect(
+        authSettingsUpdateSchema.safeParse({
+          emailTemplates: [
+            { flow: "invite", subject: "a" },
+            { flow: "invite", subject: "b" },
+          ],
+        }).success,
+      ).toBe(false);
+    });
+
+    it("allows an entry that omits subject or bodyHtml (per-field keep-existing)", () => {
+      expect(
+        authSettingsUpdateSchema.safeParse({
+          emailTemplates: [{ flow: "magic_link", subject: "Only subject" }],
+        }).success,
+      ).toBe(true);
+      expect(
+        authSettingsUpdateSchema.safeParse({
+          emailTemplates: [{ flow: "magic_link", bodyHtml: "<p>Only body</p>" }],
+        }).success,
+      ).toBe(true);
+    });
+  });
 });
