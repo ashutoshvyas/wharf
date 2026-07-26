@@ -98,11 +98,66 @@ model DbInstance {
   createdAt          DateTime       @default(now()) @map("created_at")
   updatedAt          DateTime       @updatedAt @map("updated_at")
 
-  server   Server    @relation(fields: [serverId], references: [id], onDelete: Restrict)
-  websites Website[]
+  server       Server                 @relation(fields: [serverId], references: [id], onDelete: Restrict)
+  websites     Website[]
+  authSettings InstanceAuthSettings?
 
   @@unique([serverId, remotePath])
   @@map("db_instances")
+}
+
+/**
+ * Self-hosted-configurable Auth (GoTrue) settings for one instance.
+ * Kept as its own 1:1 model rather than more columns on DbInstance — matches
+ * this schema's existing convention (Server/DbInstance both use discrete
+ * `*Enc` columns, never a JSON secret blob) and gives this feature its own
+ * migration/audit boundary. Applied to the instance by re-rendering its
+ * .env/docker-compose.yml and restarting only its `auth` container
+ * (lib/provision/auth-settings.ts) — never touched at provision time itself.
+ */
+model InstanceAuthSettings {
+  id           String @id @default(uuid())
+  dbInstanceId String @unique @map("db_instance_id")
+
+  // Sign-up / session — mirrors templates/supabase/.env.template's Auth section.
+  disableSignup          Boolean @default(false) @map("disable_signup")
+  enableEmailSignup      Boolean @default(true) @map("enable_email_signup")
+  enableEmailAutoconfirm Boolean @default(true) @map("enable_email_autoconfirm")
+  enablePhoneSignup      Boolean @default(false) @map("enable_phone_signup")
+  enableAnonymousUsers   Boolean @default(false) @map("enable_anonymous_users")
+  jwtExpirySeconds       Int     @default(3600) @map("jwt_expiry_seconds")
+  additionalRedirectUrls String? @map("additional_redirect_urls")
+
+  // SMTP — templates/supabase/.env.template ships a fake, non-resolving
+  // relay by default (SMTP_HOST=supabase-mail); these let an operator point
+  // at a real one.
+  smtpHost       String? @map("smtp_host")
+  smtpPort       Int?    @map("smtp_port")
+  smtpUser       String? @map("smtp_user")
+  smtpPassEnc    Bytes?  @map("smtp_pass_enc")
+  smtpSenderName String? @map("smtp_sender_name")
+  smtpAdminEmail String? @map("smtp_admin_email")
+
+  // OAuth providers — GOTRUE_EXTERNAL_* vars already exist (commented out)
+  // in templates/supabase/docker-compose.yml.
+  googleEnabled   Boolean @default(false) @map("google_enabled")
+  googleClientId  String? @map("google_client_id")
+  googleSecretEnc Bytes?  @map("google_secret_enc")
+
+  githubEnabled   Boolean @default(false) @map("github_enabled")
+  githubClientId  String? @map("github_client_id")
+  githubSecretEnc Bytes?  @map("github_secret_enc")
+
+  azureEnabled   Boolean @default(false) @map("azure_enabled")
+  azureClientId  String? @map("azure_client_id")
+  azureSecretEnc Bytes?  @map("azure_secret_enc")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  dbInstance DbInstance @relation(fields: [dbInstanceId], references: [id], onDelete: Cascade)
+
+  @@map("instance_auth_settings")
 }
 
 model PanelUser {

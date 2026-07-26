@@ -34,5 +34,5 @@ export default async function ManagePage({
   // the client DTO narrows it to the InstanceStatus union. The redirect above
   // already guarantees this row is "running".
   const instance = serializeInstance(row) as unknown as InstanceDto;
-  return <ManageView instance={instance} />;
+  return <ManageView instance={instance} role={role} />;
 }

@@ -409,3 +409,122 @@ describe("renderInstanceCompose — determinism", () => {
     expect(other.composeYaml).toContain("traefik.http.routers.sb_9e01-studio.middlewares");
   });
 });
+
+describe("renderInstanceCompose — Auth settings", () => {
+  it("renders exactly today's hardcoded defaults when authSettings is absent", async () => {
+    const { envFile } = await renderDoc();
+    expect(envValue(envFile, "DISABLE_SIGNUP")).toBe("false");
+    expect(envValue(envFile, "ENABLE_EMAIL_SIGNUP")).toBe("true");
+    expect(envValue(envFile, "ENABLE_EMAIL_AUTOCONFIRM")).toBe("true");
+    expect(envValue(envFile, "ENABLE_PHONE_SIGNUP")).toBe("false");
+    expect(envValue(envFile, "ENABLE_ANONYMOUS_USERS")).toBe("false");
+    expect(envValue(envFile, "JWT_EXPIRY")).toBe("3600");
+    expect(envValue(envFile, "ADDITIONAL_REDIRECT_URLS")).toBe("");
+    expect(envValue(envFile, "SMTP_HOST")).toBe("supabase-mail");
+    expect(envValue(envFile, "SMTP_PORT")).toBe("2500");
+    expect(envValue(envFile, "SMTP_USER")).toBe("fake_mail_user");
+    expect(envValue(envFile, "SMTP_PASS")).toBe("fake_mail_password");
+    expect(envValue(envFile, "SMTP_SENDER_NAME")).toBe("fake_sender");
+    expect(envValue(envFile, "SMTP_ADMIN_EMAIL")).toBe("admin@example.com");
+    expect(envValue(envFile, "GOOGLE_ENABLED")).toBe("false");
+    expect(envValue(envFile, "GOOGLE_CLIENT_ID")).toBe("");
+    expect(envValue(envFile, "GOOGLE_SECRET")).toBe("");
+    expect(envValue(envFile, "GITHUB_ENABLED")).toBe("false");
+    expect(envValue(envFile, "AZURE_ENABLED")).toBe("false");
+  });
+
+  it("substitutes every provided Auth setting", async () => {
+    const { envFile } = await renderDoc({
+      authSettings: {
+        disableSignup: true,
+        enableEmailSignup: false,
+        enableEmailAutoconfirm: false,
+        enablePhoneSignup: true,
+        enableAnonymousUsers: true,
+        jwtExpirySeconds: 7200,
+        additionalRedirectUrls: "https://clienta.example.com/callback",
+        smtpHost: "smtp.sendgrid.net",
+        smtpPort: 587,
+        smtpUser: "apikey",
+        smtpPass: "SG.real-secret-value",
+        smtpSenderName: "Client A",
+        smtpAdminEmail: "ops@clienta.example.com",
+        googleEnabled: true,
+        googleClientId: "google-client-id.apps.googleusercontent.com",
+        googleSecret: "google-secret-value",
+        githubEnabled: true,
+        githubClientId: "github-client-id",
+        githubSecret: "github-secret-value",
+        azureEnabled: true,
+        azureClientId: "azure-client-id",
+        azureSecret: "azure-secret-value",
+      },
+    });
+
+    expect(envValue(envFile, "DISABLE_SIGNUP")).toBe("true");
+    expect(envValue(envFile, "ENABLE_EMAIL_SIGNUP")).toBe("false");
+    expect(envValue(envFile, "ENABLE_EMAIL_AUTOCONFIRM")).toBe("false");
+    expect(envValue(envFile, "ENABLE_PHONE_SIGNUP")).toBe("true");
+    expect(envValue(envFile, "ENABLE_ANONYMOUS_USERS")).toBe("true");
+    expect(envValue(envFile, "JWT_EXPIRY")).toBe("7200");
+    expect(envValue(envFile, "ADDITIONAL_REDIRECT_URLS")).toBe(
+      "https://clienta.example.com/callback",
+    );
+    expect(envValue(envFile, "SMTP_HOST")).toBe("smtp.sendgrid.net");
+    expect(envValue(envFile, "SMTP_PORT")).toBe("587");
+    expect(envValue(envFile, "SMTP_USER")).toBe("apikey");
+    expect(envValue(envFile, "SMTP_PASS")).toBe("SG.real-secret-value");
+    expect(envValue(envFile, "SMTP_SENDER_NAME")).toBe("Client A");
+    expect(envValue(envFile, "SMTP_ADMIN_EMAIL")).toBe("ops@clienta.example.com");
+    expect(envValue(envFile, "GOOGLE_ENABLED")).toBe("true");
+    expect(envValue(envFile, "GOOGLE_CLIENT_ID")).toBe(
+      "google-client-id.apps.googleusercontent.com",
+    );
+    expect(envValue(envFile, "GOOGLE_SECRET")).toBe("google-secret-value");
+    expect(envValue(envFile, "GITHUB_ENABLED")).toBe("true");
+    expect(envValue(envFile, "GITHUB_CLIENT_ID")).toBe("github-client-id");
+    expect(envValue(envFile, "GITHUB_SECRET")).toBe("github-secret-value");
+    expect(envValue(envFile, "AZURE_ENABLED")).toBe("true");
+    expect(envValue(envFile, "AZURE_CLIENT_ID")).toBe("azure-client-id");
+    expect(envValue(envFile, "AZURE_SECRET")).toBe("azure-secret-value");
+  });
+
+  it("uncomments the OAuth env lines on the auth service so GoTrue always reads them", async () => {
+    const { composeYaml } = await renderDoc();
+    expect(composeYaml).toContain("GOTRUE_EXTERNAL_GOOGLE_ENABLED: ${GOOGLE_ENABLED}");
+    expect(composeYaml).toContain("GOTRUE_EXTERNAL_GITHUB_ENABLED: ${GITHUB_ENABLED}");
+    expect(composeYaml).toContain("GOTRUE_EXTERNAL_AZURE_ENABLED: ${AZURE_ENABLED}");
+    expect(composeYaml).not.toContain("# GOTRUE_EXTERNAL_GOOGLE_ENABLED");
+  });
+
+  it("rejects an Auth setting containing a line break before it ever reaches the .env", async () => {
+    await expect(
+      renderDoc({
+        authSettings: {
+          disableSignup: false,
+          enableEmailSignup: true,
+          enableEmailAutoconfirm: true,
+          enablePhoneSignup: false,
+          enableAnonymousUsers: false,
+          jwtExpirySeconds: 3600,
+          additionalRedirectUrls: "https://evil.example.com/x\nPOSTGRES_PASSWORD=pwned",
+          smtpHost: "supabase-mail",
+          smtpPort: 2500,
+          smtpUser: "fake_mail_user",
+          smtpPass: "fake_mail_password",
+          smtpSenderName: "fake_sender",
+          smtpAdminEmail: "admin@example.com",
+          googleEnabled: false,
+          googleClientId: "",
+          googleSecret: "",
+          githubEnabled: false,
+          githubClientId: "",
+          githubSecret: "",
+          azureEnabled: false,
+          azureClientId: "",
+          azureSecret: "",
+        },
+      }),
+    ).rejects.toThrow(/line break/);
+  });
+});

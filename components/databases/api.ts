@@ -77,6 +77,68 @@ export interface SlugAvailabilityDto {
   available: boolean;
 }
 
+/**
+ * GET/PATCH /api/db-instances/:id/auth-settings — self-hosted-
+ * configurable Auth (GoTrue) settings. Secret fields are never echoed —
+ * only a `*Configured` boolean, same rule as InstanceSecretsDto.
+ */
+export interface AuthSettingsDto {
+  disableSignup: boolean;
+  enableEmailSignup: boolean;
+  enableEmailAutoconfirm: boolean;
+  enablePhoneSignup: boolean;
+  enableAnonymousUsers: boolean;
+  jwtExpirySeconds: number;
+  additionalRedirectUrls: string;
+  smtpHost: string;
+  smtpPort: number;
+  smtpUser: string;
+  smtpPassConfigured: boolean;
+  smtpSenderName: string;
+  smtpAdminEmail: string;
+  googleEnabled: boolean;
+  googleClientId: string;
+  googleSecretConfigured: boolean;
+  githubEnabled: boolean;
+  githubClientId: string;
+  githubSecretConfigured: boolean;
+  azureEnabled: boolean;
+  azureClientId: string;
+  azureSecretConfigured: boolean;
+}
+
+/** PATCH-only: leave a secret field undefined to keep the stored value. */
+export interface AuthSettingsUpdatePayload {
+  disableSignup?: boolean;
+  enableEmailSignup?: boolean;
+  enableEmailAutoconfirm?: boolean;
+  enablePhoneSignup?: boolean;
+  enableAnonymousUsers?: boolean;
+  jwtExpirySeconds?: number;
+  additionalRedirectUrls?: string;
+  smtpHost?: string;
+  smtpPort?: number;
+  smtpUser?: string;
+  smtpPass?: string;
+  smtpSenderName?: string;
+  smtpAdminEmail?: string;
+  googleEnabled?: boolean;
+  googleClientId?: string;
+  googleSecret?: string;
+  githubEnabled?: boolean;
+  githubClientId?: string;
+  githubSecret?: string;
+  azureEnabled?: boolean;
+  azureClientId?: string;
+  azureSecret?: string;
+}
+
+/** Returned alongside the DTO on PATCH — whether the auth container restart succeeded. */
+export interface AuthSettingsPatchResultDto extends AuthSettingsDto {
+  applied: boolean;
+  applyError?: string;
+}
+
 /** Error carrying the HTTP status so callers can branch on 400 / 403 / 409. */
 export class ApiError extends Error {
   readonly status: number;
@@ -223,6 +285,28 @@ export async function fetchInstanceSecrets(
   return apiFetch<InstanceSecretsDto>(`/api/db-instances/${id}/secrets`, {
     cache: "no-store",
   });
+}
+
+export async function fetchAuthSettings(id: string): Promise<AuthSettingsDto> {
+  return apiFetch<AuthSettingsDto>(`/api/db-instances/${id}/auth-settings`, {
+    cache: "no-store",
+  });
+}
+
+/**
+ * Saves settings AND attempts to apply them (re-render + restart the auth
+ * container) in one call. `applied: false` in the response means the values
+ * were still saved — only the server-side restart didn't take; see
+ * `applyError` for why.
+ */
+export async function updateAuthSettings(
+  id: string,
+  payload: AuthSettingsUpdatePayload,
+): Promise<AuthSettingsPatchResultDto> {
+  return apiFetch<AuthSettingsPatchResultDto>(
+    `/api/db-instances/${id}/auth-settings`,
+    jsonInit("PATCH", payload),
+  );
 }
 
 export async function checkSlugAvailable(

@@ -23,14 +23,23 @@ import { Alert } from "@/components/ui/alert";
 import { Button, ButtonLink } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { StatusBadge } from "@/components/ui/status-badge";
+import { cn } from "@/lib/cn";
+import type { Role } from "@/lib/rbac";
 import type { InstanceDto } from "./api";
+import { AuthSettingsForm } from "./auth-settings-form";
 
 /** How long to wait for the iframe's load event before offering the fallback. */
 const LOAD_TIMEOUT_MS = 12_000;
 
-export function ManageView({ instance }: { instance: InstanceDto }) {
+type Tab = "studio" | "auth";
+
+const TAB_CLASSES =
+  "rounded-[6px] px-2.5 py-1 text-[12.5px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cobalt-400";
+
+export function ManageView({ instance, role }: { instance: InstanceDto; role: Role }) {
   const studioUrl = `https://${instance.studioSubdomain}`;
   const [blocked, setBlocked] = useState(false);
+  const [tab, setTab] = useState<Tab>("studio");
   const loaded = useRef(false);
 
   useEffect(() => {
@@ -53,23 +62,57 @@ export function ManageView({ instance }: { instance: InstanceDto }) {
         </Link>
         <span className="font-semibold">{instance.name}</span>
         <StatusBadge status="running" />
-        <span className="truncate font-mono text-xs text-neutral-400 max-md:hidden">
-          {instance.studioSubdomain} · session via forwardAuth — no Studio login
-        </span>
+        <div className="flex items-center gap-1 rounded-[8px] bg-neutral-100 p-0.5">
+          <button
+            type="button"
+            onClick={() => setTab("studio")}
+            className={cn(
+              TAB_CLASSES,
+              tab === "studio"
+                ? "bg-white text-ink shadow-sm"
+                : "text-neutral-500 hover:text-ink",
+            )}
+          >
+            Studio
+          </button>
+          <button
+            type="button"
+            onClick={() => setTab("auth")}
+            className={cn(
+              TAB_CLASSES,
+              tab === "auth"
+                ? "bg-white text-ink shadow-sm"
+                : "text-neutral-500 hover:text-ink",
+            )}
+          >
+            Auth settings
+          </button>
+        </div>
+        {tab === "studio" ? (
+          <span className="truncate font-mono text-xs text-neutral-400 max-md:hidden">
+            {instance.studioSubdomain} · session via forwardAuth — no Studio login
+          </span>
+        ) : null}
         <span className="flex-1" />
-        <ButtonLink
-          href={studioUrl}
-          target="_blank"
-          rel="noopener"
-          variant="secondary"
-          size="sm"
-        >
-          Open in new tab
-          <ExternalLink size={13} strokeWidth={1.75} aria-hidden />
-        </ButtonLink>
+        {tab === "studio" ? (
+          <ButtonLink
+            href={studioUrl}
+            target="_blank"
+            rel="noopener"
+            variant="secondary"
+            size="sm"
+          >
+            Open in new tab
+            <ExternalLink size={13} strokeWidth={1.75} aria-hidden />
+          </ButtonLink>
+        ) : null}
       </div>
 
-      {blocked ? (
+      {tab === "auth" ? (
+        <div className="min-h-0 flex-1 overflow-y-auto bg-neutral-50">
+          <AuthSettingsForm instance={instance} role={role} />
+        </div>
+      ) : blocked ? (
         <div className="flex flex-1 items-center justify-center bg-neutral-50 p-6">
           <div className="w-full max-w-[520px] rounded-md border border-neutral-200 bg-white shadow-sm">
             <div className="p-5">

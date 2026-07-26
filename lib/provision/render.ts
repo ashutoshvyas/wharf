@@ -71,7 +71,67 @@ export interface RenderInstanceInput {
   secrets: InstanceSecrets;
   /** Absolute remote directory, from remotePathFor(project). Recorded in a header comment. */
   remotePath: string;
+  /**
+   * Self-hosted-configurable Auth settings — decrypted plain
+   * values, sourced from `InstanceAuthSettings` by
+   * lib/provision/auth-settings.ts. Absent on a fresh provision (nothing
+   * configured yet) and defaults to exactly the values this template always
+   * hardcoded, so behavior is unchanged until an operator sets something.
+   */
+  authSettings?: AuthSettingsValues;
 }
+
+/** Plain (decrypted) shape of one instance's admin-configurable Auth settings. */
+export interface AuthSettingsValues {
+  disableSignup: boolean;
+  enableEmailSignup: boolean;
+  enableEmailAutoconfirm: boolean;
+  enablePhoneSignup: boolean;
+  enableAnonymousUsers: boolean;
+  jwtExpirySeconds: number;
+  additionalRedirectUrls: string;
+  smtpHost: string;
+  smtpPort: number;
+  smtpUser: string;
+  smtpPass: string;
+  smtpSenderName: string;
+  smtpAdminEmail: string;
+  googleEnabled: boolean;
+  googleClientId: string;
+  googleSecret: string;
+  githubEnabled: boolean;
+  githubClientId: string;
+  githubSecret: string;
+  azureEnabled: boolean;
+  azureClientId: string;
+  azureSecret: string;
+}
+
+/** Exactly what .env.template hardcoded before unchanged behavior when unset. */
+export const DEFAULT_AUTH_SETTINGS: AuthSettingsValues = {
+  disableSignup: false,
+  enableEmailSignup: true,
+  enableEmailAutoconfirm: true,
+  enablePhoneSignup: false,
+  enableAnonymousUsers: false,
+  jwtExpirySeconds: 3600,
+  additionalRedirectUrls: "",
+  smtpHost: "supabase-mail",
+  smtpPort: 2500,
+  smtpUser: "fake_mail_user",
+  smtpPass: "fake_mail_password",
+  smtpSenderName: "fake_sender",
+  smtpAdminEmail: "admin@example.com",
+  googleEnabled: false,
+  googleClientId: "",
+  googleSecret: "",
+  githubEnabled: false,
+  githubClientId: "",
+  githubSecret: "",
+  azureEnabled: false,
+  azureClientId: "",
+  azureSecret: "",
+};
 
 export interface RenderedInstance {
   composeYaml: string;
@@ -165,6 +225,17 @@ function validateInput(input: RenderInstanceInput): void {
     // A newline would terminate the .env line early and smuggle in a variable.
     if (/[\r\n]/.test(value)) {
       throw new Error(`Secret ${name} contains a line break, which cannot be written to a .env.`);
+    }
+  }
+  // Same injection risk applies to admin-supplied Auth settings strings
+  // — these ultimately reach the same unescaped .env format.
+  if (input.authSettings) {
+    for (const [name, value] of Object.entries(input.authSettings)) {
+      if (typeof value === "string" && /[\r\n]/.test(value)) {
+        throw new Error(
+          `Auth setting ${name} contains a line break, which cannot be written to a .env.`,
+        );
+      }
     }
   }
 }
@@ -285,6 +356,36 @@ async function renderEnv(
     S3_PROTOCOL_ACCESS_KEY_ID: ancillary.s3AccessKeyId,
     S3_PROTOCOL_ACCESS_KEY_SECRET: ancillary.s3AccessKeySecret,
   };
+
+  // self-hosted-configurable Auth settings. Falls back to exactly
+  // what this template hardcoded before this feature existed, so a fresh
+  // provision with nothing configured yet renders byte-identical output.
+  const auth = input.authSettings ?? DEFAULT_AUTH_SETTINGS;
+  const bool = (b: boolean) => (b ? "true" : "false");
+  Object.assign(values, {
+    DISABLE_SIGNUP: bool(auth.disableSignup),
+    ENABLE_EMAIL_SIGNUP: bool(auth.enableEmailSignup),
+    ENABLE_EMAIL_AUTOCONFIRM: bool(auth.enableEmailAutoconfirm),
+    ENABLE_PHONE_SIGNUP: bool(auth.enablePhoneSignup),
+    ENABLE_ANONYMOUS_USERS: bool(auth.enableAnonymousUsers),
+    JWT_EXPIRY: String(auth.jwtExpirySeconds),
+    ADDITIONAL_REDIRECT_URLS: auth.additionalRedirectUrls,
+    SMTP_HOST: auth.smtpHost,
+    SMTP_PORT: String(auth.smtpPort),
+    SMTP_USER: auth.smtpUser,
+    SMTP_PASS: auth.smtpPass,
+    SMTP_SENDER_NAME: auth.smtpSenderName,
+    SMTP_ADMIN_EMAIL: auth.smtpAdminEmail,
+    GOOGLE_ENABLED: bool(auth.googleEnabled),
+    GOOGLE_CLIENT_ID: auth.googleClientId,
+    GOOGLE_SECRET: auth.googleSecret,
+    GITHUB_ENABLED: bool(auth.githubEnabled),
+    GITHUB_CLIENT_ID: auth.githubClientId,
+    GITHUB_SECRET: auth.githubSecret,
+    AZURE_ENABLED: bool(auth.azureEnabled),
+    AZURE_CLIENT_ID: auth.azureClientId,
+    AZURE_SECRET: auth.azureSecret,
+  });
 
   let rendered = template;
   for (const [key, value] of Object.entries(values)) {
