@@ -13,6 +13,7 @@
  * receives the panel session cookie. Empty/unset → host-only cookie (dev).
  */
 import type { NextAuthConfig } from "next-auth";
+import { isTrustedInstanceHost } from "@/lib/instance-host";
 
 const useSecureCookies = (process.env.NEXTAUTH_URL ?? "").startsWith("https");
 
@@ -52,6 +53,23 @@ export default {
       session.user.role = token.role;
       if (token.email) session.user.email = token.email;
       return session;
+    },
+    // Auth.js's built-in default only allows same-origin redirects, which
+    // would otherwise silently discard the Studio forwardAuth gate's returnTo
+    // (studio-{slug}.INSTANCE_DOMAIN is a different origin than the panel)
+    // and drop the signed-in user on the panel dashboard instead of back in
+    // Studio (confirmed live). Trust it only when it's genuinely one of our
+    // own instance subdomains — anything else falls back to same-origin
+    // handling, same as the default.
+    redirect({ url, baseUrl }) {
+      try {
+        const target = new URL(url, baseUrl);
+        if (target.origin === new URL(baseUrl).origin) return target.toString();
+        if (isTrustedInstanceHost(target.hostname)) return target.toString();
+      } catch {
+        // fall through to baseUrl
+      }
+      return baseUrl;
     },
   },
   providers: [], // Credentials provider added in lib/auth.ts (needs Node runtime)

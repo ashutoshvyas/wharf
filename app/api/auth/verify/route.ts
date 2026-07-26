@@ -24,6 +24,7 @@
  * (as X-Wharf-User, which Traefik is configured to forward to Studio).
  */
 import { decode } from "@auth/core/jwt";
+import { isTrustedInstanceHost } from "@/lib/instance-host";
 import { can, type Role } from "@/lib/rbac";
 
 /** Both names Auth.js may have issued the session cookie under. */
@@ -68,16 +69,7 @@ function originalUrl(req: Request): string | null {
   if (!host) return null;
 
   const hostname = host.split(":")[0]!.toLowerCase();
-  const apex = (process.env.INSTANCE_DOMAIN ?? "").trim().toLowerCase();
-  const underApex = apex !== "" && (hostname === apex || hostname.endsWith(`.${apex}`));
-
-  let panelHost = "";
-  try {
-    panelHost = new URL(process.env.PANEL_URL ?? "").hostname.toLowerCase();
-  } catch {
-    panelHost = "";
-  }
-  if (!underApex || hostname === panelHost) return null;
+  if (!isTrustedInstanceHost(hostname)) return null;
 
   const proto = h.get("x-forwarded-proto") ?? "https";
   const uri = h.get("x-forwarded-uri") ?? "/";

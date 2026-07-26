@@ -11,18 +11,10 @@
  */
 import { AuthError } from "next-auth";
 import { signIn } from "@/lib/auth";
+import { safeReturnTo } from "./return-to";
 
 export interface LoginState {
   error: string | null;
-}
-
-/** Prevent open redirects: only same-origin absolute paths pass through. */
-function safeReturnTo(raw: FormDataEntryValue | null): string {
-  const value = typeof raw === "string" ? raw : "";
-  if (value.startsWith("/") && !value.startsWith("//") && !value.startsWith("/\\")) {
-    return value;
-  }
-  return "/databases";
 }
 
 export async function loginAction(
