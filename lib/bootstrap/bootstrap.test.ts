@@ -102,6 +102,14 @@ describe("templates", () => {
     const compose = await readFile(path.join(base, "docker-compose.yml"), "utf8");
     expect(compose).toContain(TRAEFIK_NETWORK);
     expect(compose).toContain("external: true");
+    // Bugfix regression: without an explicit DOCKER_API_VERSION, some hosts'
+    // docker.sock fails the Docker SDK's version auto-negotiation and
+    // Traefik's client falls back to an ancient default the daemon refuses
+    // ("client version 1.24 is too old"). Traefik then never discovers ANY
+    // container's labels — silently, retrying forever — which is exactly
+    // the failure mode that made every provisioned instance unreachable
+    // despite healthy containers and correctly-rendered compose labels.
+    expect(compose).toMatch(/DOCKER_API_VERSION\s*=\s*1\.\d+/);
     const yml = await readFile(path.join(base, "traefik.yml"), "utf8");
     expect(yml).toContain("letsencrypt");
     expect(yml).toContain("httpChallenge");
