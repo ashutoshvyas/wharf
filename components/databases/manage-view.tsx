@@ -135,11 +135,11 @@ export function ManageView({ instance, role }: { instance: InstanceDto; role: Ro
       </div>
 
       {tab === "auth" ? (
-        <div className="min-h-0 flex-1 overflow-y-auto bg-neutral-50">
+        <div className="min-h-0 flex-1 overflow-hidden bg-neutral-50">
           <AuthSettingsForm instance={instance} role={role} />
         </div>
       ) : tab === "email-templates" ? (
-        <div className="min-h-0 flex-1 overflow-y-auto bg-neutral-50">
+        <div className="min-h-0 flex-1 overflow-hidden bg-neutral-50">
           <EmailTemplatesForm instance={instance} role={role} />
         </div>
       ) : tab === "analytics-buckets" ? (

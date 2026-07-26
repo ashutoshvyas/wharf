@@ -27,6 +27,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/cn";
+import { SettingsHeading, SettingsNavItem, SettingsShell } from "./settings-shell";
 import {
   fetchAuthSettings,
   updateAuthSettings,
@@ -34,6 +35,14 @@ import {
   type AuthSettingsUpdatePayload,
   type InstanceDto,
 } from "./api";
+
+type SettingsSection = "session" | "smtp" | "providers";
+
+const SECTIONS: { key: SettingsSection; label: string; icon: ReactNode }[] = [
+  { key: "session", label: "Session", icon: <ShieldCheck size={16} strokeWidth={1.75} /> },
+  { key: "smtp", label: "SMTP", icon: <Mail size={16} strokeWidth={1.75} /> },
+  { key: "providers", label: "Providers", icon: <KeyRound size={16} strokeWidth={1.75} /> },
+];
 
 const INPUT_CLASSES =
   "h-10 w-full rounded-[6px] border border-neutral-200 bg-white px-3 text-sm text-ink " +
@@ -81,31 +90,6 @@ function Toggle({
       />
       {label}
     </label>
-  );
-}
-
-function Section({
-  icon,
-  title,
-  description,
-  children,
-}: {
-  icon: ReactNode;
-  title: string;
-  description: string;
-  children: ReactNode;
-}) {
-  return (
-    <Card className="p-5">
-      <div className="mb-4 flex items-start gap-2.5">
-        <div className="mt-0.5 text-neutral-400">{icon}</div>
-        <div>
-          <h3 className="text-[14.5px] font-semibold text-ink">{title}</h3>
-          <p className="mt-0.5 text-[13px] text-neutral-500">{description}</p>
-        </div>
-      </div>
-      <div className="flex flex-col gap-3.5">{children}</div>
-    </Card>
   );
 }
 
@@ -313,6 +297,7 @@ export function AuthSettingsForm({ instance, role }: { instance: InstanceDto; ro
   });
 
   const [form, setForm] = useState<FormState | null>(null);
+  const [activeSection, setActiveSection] = useState<SettingsSection>("session");
   const [expandedProvider, setExpandedProvider] = useState<string | null>(null);
   const toggleExpanded = (name: string) =>
     setExpandedProvider((current) => (current === name ? null : name));
@@ -366,290 +351,301 @@ export function AuthSettingsForm({ instance, role }: { instance: InstanceDto; ro
   }
 
   return (
-    <form onSubmit={handleSubmit} className="mx-auto flex max-w-[720px] flex-col gap-4 p-6">
-      {!canWrite ? (
-        <Alert variant="info">
-          Viewing only — changing Auth settings requires the admin role.
-        </Alert>
-      ) : null}
-
-      <Section
-        icon={<ShieldCheck size={18} strokeWidth={1.75} />}
-        title="Sign-up & sessions"
-        description="Mirrors GoTrue's own env-var-driven config — the same settings Studio's Configuration pages would show, if self-hosted Studio rendered them."
+    <form onSubmit={handleSubmit} className="h-full">
+      <SettingsShell
+        nav={SECTIONS.map((s) => (
+          <SettingsNavItem
+            key={s.key}
+            icon={s.icon}
+            label={s.label}
+            active={activeSection === s.key}
+            onClick={() => setActiveSection(s.key)}
+          />
+        ))}
+        footer={
+          canWrite ? (
+            <Button type="submit" variant="accent" disabled={save.isPending}>
+              {save.isPending ? "Saving…" : "Save & restart auth"}
+            </Button>
+          ) : undefined
+        }
       >
-        <Toggle
-          label="Disable new sign-ups entirely"
-          checked={form.disableSignup}
-          disabled={!canWrite}
-          onChange={(v) => setForm({ ...form, disableSignup: v })}
-        />
-        <Toggle
-          label="Allow anonymous sign-ins"
-          checked={form.enableAnonymousUsers}
-          disabled={!canWrite}
-          onChange={(v) => setForm({ ...form, enableAnonymousUsers: v })}
-        />
-        <Field label="Session (JWT) expiry, in seconds">
-          <input
-            type="number"
-            min={300}
-            max={604_800}
-            value={form.jwtExpirySeconds}
-            disabled={!canWrite}
-            onChange={(e) => setForm({ ...form, jwtExpirySeconds: e.target.value })}
-            className={INPUT_CLASSES}
-          />
-        </Field>
-        <Field
-          label="Additional redirect URLs"
-          hint="Comma-separated. Extra URLs GoTrue will allow redirecting to after auth, beyond this instance's own origin."
-        >
-          <input
-            value={form.additionalRedirectUrls}
-            disabled={!canWrite}
-            onChange={(e) => setForm({ ...form, additionalRedirectUrls: e.target.value })}
-            placeholder="https://app.example.com/callback"
-            className={INPUT_CLASSES}
-          />
-        </Field>
-      </Section>
+        {!canWrite ? (
+          <Alert variant="info" className="mb-5">
+            Viewing only — changing Auth settings requires the admin role.
+          </Alert>
+        ) : null}
 
-      <Section
-        icon={<Mail size={18} strokeWidth={1.75} />}
-        title="SMTP"
-        description="Without a real relay configured, email sign-ups auto-confirm instead of sending a confirmation mail (the default above) — set these and turn autoconfirm off for a real sign-up flow."
-      >
-        <Field label="SMTP host">
-          <input
-            value={form.smtpHost}
-            disabled={!canWrite}
-            onChange={(e) => setForm({ ...form, smtpHost: e.target.value })}
-            className={INPUT_CLASSES}
-          />
-        </Field>
-        <Field label="SMTP port">
-          <input
-            type="number"
-            min={1}
-            max={65_535}
-            value={form.smtpPort}
-            disabled={!canWrite}
-            onChange={(e) => setForm({ ...form, smtpPort: e.target.value })}
-            className={INPUT_CLASSES}
-          />
-        </Field>
-        <Field label="SMTP user">
-          <input
-            value={form.smtpUser}
-            disabled={!canWrite}
-            onChange={(e) => setForm({ ...form, smtpUser: e.target.value })}
-            className={INPUT_CLASSES}
-          />
-        </Field>
-        <Field label="SMTP password">
-          <input
-            type="password"
-            autoComplete="off"
-            value={form.smtpPass}
-            disabled={!canWrite}
-            onChange={(e) => setForm({ ...form, smtpPass: e.target.value })}
-            placeholder={query.data.smtpPassConfigured ? "(unchanged)" : ""}
-            className={INPUT_CLASSES}
-          />
-        </Field>
-        <Field label="Sender name">
-          <input
-            value={form.smtpSenderName}
-            disabled={!canWrite}
-            onChange={(e) => setForm({ ...form, smtpSenderName: e.target.value })}
-            className={INPUT_CLASSES}
-          />
-        </Field>
-        <Field label="Admin email">
-          <input
-            type="email"
-            value={form.smtpAdminEmail}
-            disabled={!canWrite}
-            onChange={(e) => setForm({ ...form, smtpAdminEmail: e.target.value })}
-            className={INPUT_CLASSES}
-          />
-        </Field>
-      </Section>
-
-      <Card className="overflow-hidden p-0">
-        <div className="flex items-start gap-2.5 p-5 pb-4">
-          <div className="mt-0.5 text-neutral-400">
-            <KeyRound size={18} strokeWidth={1.75} />
+        {activeSection === "session" ? (
+          <div className="flex flex-col gap-3.5">
+            <SettingsHeading
+              title="Session"
+              description="Mirrors GoTrue's own env-var-driven config — the same settings Studio's Configuration pages would show, if self-hosted Studio rendered them."
+            />
+            <Toggle
+              label="Disable new sign-ups entirely"
+              checked={form.disableSignup}
+              disabled={!canWrite}
+              onChange={(v) => setForm({ ...form, disableSignup: v })}
+            />
+            <Toggle
+              label="Allow anonymous sign-ins"
+              checked={form.enableAnonymousUsers}
+              disabled={!canWrite}
+              onChange={(v) => setForm({ ...form, enableAnonymousUsers: v })}
+            />
+            <Field label="Session (JWT) expiry, in seconds">
+              <input
+                type="number"
+                min={300}
+                max={604_800}
+                value={form.jwtExpirySeconds}
+                disabled={!canWrite}
+                onChange={(e) => setForm({ ...form, jwtExpirySeconds: e.target.value })}
+                className={INPUT_CLASSES}
+              />
+            </Field>
+            <Field
+              label="Additional redirect URLs"
+              hint="Comma-separated. Extra URLs GoTrue will allow redirecting to after auth, beyond this instance's own origin."
+            >
+              <input
+                value={form.additionalRedirectUrls}
+                disabled={!canWrite}
+                onChange={(e) => setForm({ ...form, additionalRedirectUrls: e.target.value })}
+                placeholder="https://app.example.com/callback"
+                className={INPUT_CLASSES}
+              />
+            </Field>
           </div>
+        ) : null}
+
+        {activeSection === "smtp" ? (
+          <div className="flex flex-col gap-3.5">
+            <SettingsHeading
+              title="SMTP"
+              description="Without a real relay configured, email sign-ups auto-confirm instead of sending a confirmation mail — set these and turn autoconfirm off (under Providers → Email) for a real sign-up flow."
+            />
+            <Field label="SMTP host">
+              <input
+                value={form.smtpHost}
+                disabled={!canWrite}
+                onChange={(e) => setForm({ ...form, smtpHost: e.target.value })}
+                className={INPUT_CLASSES}
+              />
+            </Field>
+            <Field label="SMTP port">
+              <input
+                type="number"
+                min={1}
+                max={65_535}
+                value={form.smtpPort}
+                disabled={!canWrite}
+                onChange={(e) => setForm({ ...form, smtpPort: e.target.value })}
+                className={INPUT_CLASSES}
+              />
+            </Field>
+            <Field label="SMTP user">
+              <input
+                value={form.smtpUser}
+                disabled={!canWrite}
+                onChange={(e) => setForm({ ...form, smtpUser: e.target.value })}
+                className={INPUT_CLASSES}
+              />
+            </Field>
+            <Field label="SMTP password">
+              <input
+                type="password"
+                autoComplete="off"
+                value={form.smtpPass}
+                disabled={!canWrite}
+                onChange={(e) => setForm({ ...form, smtpPass: e.target.value })}
+                placeholder={query.data.smtpPassConfigured ? "(unchanged)" : ""}
+                className={INPUT_CLASSES}
+              />
+            </Field>
+            <Field label="Sender name">
+              <input
+                value={form.smtpSenderName}
+                disabled={!canWrite}
+                onChange={(e) => setForm({ ...form, smtpSenderName: e.target.value })}
+                className={INPUT_CLASSES}
+              />
+            </Field>
+            <Field label="Admin email">
+              <input
+                type="email"
+                value={form.smtpAdminEmail}
+                disabled={!canWrite}
+                onChange={(e) => setForm({ ...form, smtpAdminEmail: e.target.value })}
+                className={INPUT_CLASSES}
+              />
+            </Field>
+          </div>
+        ) : null}
+
+        {activeSection === "providers" ? (
           <div>
-            <h3 className="text-[14.5px] font-semibold text-ink">Auth Providers</h3>
-            <p className="mt-0.5 text-[13px] text-neutral-500">
-              Authenticate your users through a suite of providers and login methods.
-            </p>
+            <SettingsHeading
+              title="Providers"
+              description="Authenticate your users through a suite of providers and login methods."
+            />
+            <div className="overflow-hidden rounded-[10px] border border-neutral-200 bg-white">
+              <ProviderRow
+                icon={<Mail size={17} strokeWidth={1.75} />}
+                name="Email"
+                enabled={form.enableEmailSignup}
+                expanded={expandedProvider === "email"}
+                onToggleExpand={() => toggleExpanded("email")}
+              >
+                <Toggle
+                  label="Allow email sign-up"
+                  checked={form.enableEmailSignup}
+                  disabled={!canWrite}
+                  onChange={(v) => setForm({ ...form, enableEmailSignup: v })}
+                />
+                <Toggle
+                  label="Auto-confirm email sign-ups (skip the confirmation email)"
+                  checked={form.enableEmailAutoconfirm}
+                  disabled={!canWrite}
+                  onChange={(v) => setForm({ ...form, enableEmailAutoconfirm: v })}
+                />
+              </ProviderRow>
+
+              <ProviderRow
+                icon={<Phone size={17} strokeWidth={1.75} />}
+                name="Phone"
+                enabled={form.enablePhoneSignup}
+                expanded={expandedProvider === "phone"}
+                onToggleExpand={() => toggleExpanded("phone")}
+              >
+                <Toggle
+                  label="Allow phone sign-up"
+                  checked={form.enablePhoneSignup}
+                  disabled={!canWrite}
+                  onChange={(v) => setForm({ ...form, enablePhoneSignup: v })}
+                />
+                <p className="text-xs text-neutral-500">
+                  Sends OTPs via an SMS provider (Twilio, MessageBird, ...) — not wired up
+                  self-hosted yet, so phone sign-up will accept the toggle but cannot send
+                  codes until that&apos;s added.
+                </p>
+              </ProviderRow>
+
+              <ProviderRow
+                icon={<GoogleIcon />}
+                name="Google"
+                enabled={form.googleEnabled}
+                expanded={expandedProvider === "google"}
+                onToggleExpand={() => toggleExpanded("google")}
+              >
+                <Toggle
+                  label="Enable Google"
+                  checked={form.googleEnabled}
+                  disabled={!canWrite}
+                  onChange={(v) => setForm({ ...form, googleEnabled: v })}
+                />
+                <Field label="Client ID">
+                  <input
+                    value={form.googleClientId}
+                    disabled={!canWrite}
+                    onChange={(e) => setForm({ ...form, googleClientId: e.target.value })}
+                    className={INPUT_CLASSES}
+                  />
+                </Field>
+                <Field
+                  label="Client secret"
+                  hint="Register an OAuth app with this instance's API URL + /callback as the redirect URI."
+                >
+                  <input
+                    type="password"
+                    autoComplete="off"
+                    value={form.googleSecret}
+                    disabled={!canWrite}
+                    onChange={(e) => setForm({ ...form, googleSecret: e.target.value })}
+                    placeholder={query.data.googleSecretConfigured ? "(unchanged)" : ""}
+                    className={INPUT_CLASSES}
+                  />
+                </Field>
+              </ProviderRow>
+
+              <ProviderRow
+                icon={<GithubIcon />}
+                name="GitHub"
+                enabled={form.githubEnabled}
+                expanded={expandedProvider === "github"}
+                onToggleExpand={() => toggleExpanded("github")}
+              >
+                <Toggle
+                  label="Enable GitHub"
+                  checked={form.githubEnabled}
+                  disabled={!canWrite}
+                  onChange={(v) => setForm({ ...form, githubEnabled: v })}
+                />
+                <Field label="Client ID">
+                  <input
+                    value={form.githubClientId}
+                    disabled={!canWrite}
+                    onChange={(e) => setForm({ ...form, githubClientId: e.target.value })}
+                    className={INPUT_CLASSES}
+                  />
+                </Field>
+                <Field
+                  label="Client secret"
+                  hint="Register an OAuth app with this instance's API URL + /callback as the redirect URI."
+                >
+                  <input
+                    type="password"
+                    autoComplete="off"
+                    value={form.githubSecret}
+                    disabled={!canWrite}
+                    onChange={(e) => setForm({ ...form, githubSecret: e.target.value })}
+                    placeholder={query.data.githubSecretConfigured ? "(unchanged)" : ""}
+                    className={INPUT_CLASSES}
+                  />
+                </Field>
+              </ProviderRow>
+
+              <ProviderRow
+                icon={<AzureIcon />}
+                name="Azure"
+                enabled={form.azureEnabled}
+                expanded={expandedProvider === "azure"}
+                onToggleExpand={() => toggleExpanded("azure")}
+              >
+                <Toggle
+                  label="Enable Azure"
+                  checked={form.azureEnabled}
+                  disabled={!canWrite}
+                  onChange={(v) => setForm({ ...form, azureEnabled: v })}
+                />
+                <Field label="Client ID">
+                  <input
+                    value={form.azureClientId}
+                    disabled={!canWrite}
+                    onChange={(e) => setForm({ ...form, azureClientId: e.target.value })}
+                    className={INPUT_CLASSES}
+                  />
+                </Field>
+                <Field
+                  label="Client secret"
+                  hint="Register an OAuth app with this instance's API URL + /callback as the redirect URI."
+                >
+                  <input
+                    type="password"
+                    autoComplete="off"
+                    value={form.azureSecret}
+                    disabled={!canWrite}
+                    onChange={(e) => setForm({ ...form, azureSecret: e.target.value })}
+                    placeholder={query.data.azureSecretConfigured ? "(unchanged)" : ""}
+                    className={INPUT_CLASSES}
+                  />
+                </Field>
+              </ProviderRow>
+            </div>
           </div>
-        </div>
-
-        <ProviderRow
-          icon={<Mail size={17} strokeWidth={1.75} />}
-          name="Email"
-          enabled={form.enableEmailSignup}
-          expanded={expandedProvider === "email"}
-          onToggleExpand={() => toggleExpanded("email")}
-        >
-          <Toggle
-            label="Allow email sign-up"
-            checked={form.enableEmailSignup}
-            disabled={!canWrite}
-            onChange={(v) => setForm({ ...form, enableEmailSignup: v })}
-          />
-          <Toggle
-            label="Auto-confirm email sign-ups (skip the confirmation email)"
-            checked={form.enableEmailAutoconfirm}
-            disabled={!canWrite}
-            onChange={(v) => setForm({ ...form, enableEmailAutoconfirm: v })}
-          />
-        </ProviderRow>
-
-        <ProviderRow
-          icon={<Phone size={17} strokeWidth={1.75} />}
-          name="Phone"
-          enabled={form.enablePhoneSignup}
-          expanded={expandedProvider === "phone"}
-          onToggleExpand={() => toggleExpanded("phone")}
-        >
-          <Toggle
-            label="Allow phone sign-up"
-            checked={form.enablePhoneSignup}
-            disabled={!canWrite}
-            onChange={(v) => setForm({ ...form, enablePhoneSignup: v })}
-          />
-          <p className="text-xs text-neutral-500">
-            Sends OTPs via an SMS provider (Twilio, MessageBird, ...) — not wired up
-            self-hosted yet, so phone sign-up will accept the toggle but cannot send codes
-            until that&apos;s added.
-          </p>
-        </ProviderRow>
-
-        <ProviderRow
-          icon={<GoogleIcon />}
-          name="Google"
-          enabled={form.googleEnabled}
-          expanded={expandedProvider === "google"}
-          onToggleExpand={() => toggleExpanded("google")}
-        >
-          <Toggle
-            label="Enable Google"
-            checked={form.googleEnabled}
-            disabled={!canWrite}
-            onChange={(v) => setForm({ ...form, googleEnabled: v })}
-          />
-          <Field label="Client ID">
-            <input
-              value={form.googleClientId}
-              disabled={!canWrite}
-              onChange={(e) => setForm({ ...form, googleClientId: e.target.value })}
-              className={INPUT_CLASSES}
-            />
-          </Field>
-          <Field
-            label="Client secret"
-            hint="Register an OAuth app with this instance's API URL + /callback as the redirect URI."
-          >
-            <input
-              type="password"
-              autoComplete="off"
-              value={form.googleSecret}
-              disabled={!canWrite}
-              onChange={(e) => setForm({ ...form, googleSecret: e.target.value })}
-              placeholder={query.data.googleSecretConfigured ? "(unchanged)" : ""}
-              className={INPUT_CLASSES}
-            />
-          </Field>
-        </ProviderRow>
-
-        <ProviderRow
-          icon={<GithubIcon />}
-          name="GitHub"
-          enabled={form.githubEnabled}
-          expanded={expandedProvider === "github"}
-          onToggleExpand={() => toggleExpanded("github")}
-        >
-          <Toggle
-            label="Enable GitHub"
-            checked={form.githubEnabled}
-            disabled={!canWrite}
-            onChange={(v) => setForm({ ...form, githubEnabled: v })}
-          />
-          <Field label="Client ID">
-            <input
-              value={form.githubClientId}
-              disabled={!canWrite}
-              onChange={(e) => setForm({ ...form, githubClientId: e.target.value })}
-              className={INPUT_CLASSES}
-            />
-          </Field>
-          <Field
-            label="Client secret"
-            hint="Register an OAuth app with this instance's API URL + /callback as the redirect URI."
-          >
-            <input
-              type="password"
-              autoComplete="off"
-              value={form.githubSecret}
-              disabled={!canWrite}
-              onChange={(e) => setForm({ ...form, githubSecret: e.target.value })}
-              placeholder={query.data.githubSecretConfigured ? "(unchanged)" : ""}
-              className={INPUT_CLASSES}
-            />
-          </Field>
-        </ProviderRow>
-
-        <ProviderRow
-          icon={<AzureIcon />}
-          name="Azure"
-          enabled={form.azureEnabled}
-          expanded={expandedProvider === "azure"}
-          onToggleExpand={() => toggleExpanded("azure")}
-        >
-          <Toggle
-            label="Enable Azure"
-            checked={form.azureEnabled}
-            disabled={!canWrite}
-            onChange={(v) => setForm({ ...form, azureEnabled: v })}
-          />
-          <Field label="Client ID">
-            <input
-              value={form.azureClientId}
-              disabled={!canWrite}
-              onChange={(e) => setForm({ ...form, azureClientId: e.target.value })}
-              className={INPUT_CLASSES}
-            />
-          </Field>
-          <Field
-            label="Client secret"
-            hint="Register an OAuth app with this instance's API URL + /callback as the redirect URI."
-          >
-            <input
-              type="password"
-              autoComplete="off"
-              value={form.azureSecret}
-              disabled={!canWrite}
-              onChange={(e) => setForm({ ...form, azureSecret: e.target.value })}
-              placeholder={query.data.azureSecretConfigured ? "(unchanged)" : ""}
-              className={INPUT_CLASSES}
-            />
-          </Field>
-        </ProviderRow>
-      </Card>
-
-      {canWrite ? (
-        <div className="flex justify-end pb-4">
-          <Button type="submit" variant="accent" disabled={save.isPending}>
-            {save.isPending ? "Saving…" : "Save & restart auth"}
-          </Button>
-        </div>
-      ) : null}
+        ) : null}
+      </SettingsShell>
     </form>
   );
 }
