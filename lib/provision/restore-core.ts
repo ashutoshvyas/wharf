@@ -16,7 +16,7 @@
  * {@link pgPasswordEnv} and keeps it out of its own log lines.
  */
 import type { EmitFn } from "@/lib/bootstrap/steps";
-import { exec } from "@/lib/ssh";
+import { exec, sftpWrite } from "@/lib/ssh";
 
 /** The connection handle lib/ssh hands out (ssh2 Client, never imported here). */
 type SshConnection = Parameters<typeof exec>[0];
@@ -120,6 +120,107 @@ export async function takeSafetySnapshot(
  * with `--data-only` — so those callers pass their own `flags`.
  */
 export const FULL_RESTORE_FLAGS = ["--clean", "--if-exists", "--no-owner", "--no-acl"] as const;
+
+/**
+ * The roles whose passwords are this INSTANCE's identity, not the source's.
+ *
+ * `postgres` is set by the image at initdb; the rest by the template's
+ * `volumes/db/roles.sql`, which runs only once at first init. Every one of
+ * them authenticates with `POSTGRES_PASSWORD` from the instance's own .env —
+ * see the connection strings in templates/supabase/docker-compose.yml.
+ */
+export const INSTANCE_SERVICE_ROLES = [
+  "postgres",
+  "authenticator",
+  "pgbouncer",
+  "supabase_auth_admin",
+  "supabase_functions_admin",
+  "supabase_storage_admin",
+] as const;
+
+/**
+ * Put this instance's own role passwords back after loading data from another
+ * environment.
+ *
+ * A dump taken from a different Supabase project belongs to a cluster whose
+ * roles had different credentials, and a cross-environment load can leave the
+ * instance's own containers unable to authenticate — the visible symptom is
+ * Studio reporting `password authentication failed for user "postgres"`, but
+ * PostgREST, GoTrue and storage-api all share the same mechanism, so the
+ * whole stack is exposed, not just Studio.
+ *
+ * Rather than reason about exactly which statements in a foreign dump can
+ * disturb a role, this re-asserts the invariant afterwards: the roles above
+ * always end a restore holding the password in this instance's .env.
+ *
+ * SECRETS: the password is never written into the SQL, the command line, or
+ * an error message. The generated script reads `$POSTGRES_PASSWORD` from the
+ * db container's own environment through psql's backtick interpolation — the
+ * identical idiom `roles.sql` already uses — so a psql error that echoes the
+ * failing statement cannot leak it either.
+ */
+export async function reassertInstanceRoles(
+  conn: SshConnection,
+  target: TargetContainer,
+  paths: { remotePath: string; containerPath: string },
+  emit: EmitFn,
+): Promise<void> {
+  const wanted = INSTANCE_SERVICE_ROLES.map((r) => `'${r}'`).join(", ");
+  const listRes = await exec(
+    conn,
+    `${target.compose} exec -T db psql -U postgres -d postgres -At -c ` +
+      shellQuote(`select rolname from pg_roles where rolname in (${wanted})`),
+  );
+  if (listRes.code !== 0) {
+    throw new Error(
+      `could not list this instance's roles (code ${listRes.code}): ${listRes.stderr.trim()}`,
+    );
+  }
+  const present = listRes.stdout
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l): l is string => (INSTANCE_SERVICE_ROLES as readonly string[]).includes(l));
+  if (present.length === 0) {
+    emit("info", "no WHARF-managed roles found to re-assert — skipping");
+    return;
+  }
+
+  // Role names come from the constant above, never from user input.
+  const sql =
+    "\\set pgpass `echo \"$POSTGRES_PASSWORD\"`\n" +
+    present.map((r) => `ALTER USER ${r} WITH PASSWORD :'pgpass';`).join("\n") +
+    "\n";
+
+  try {
+    await sftpWrite(conn, paths.remotePath, sql, 0o600);
+    const cpRes = await exec(
+      conn,
+      `${target.compose} cp ${paths.remotePath} db:${paths.containerPath}`,
+    );
+    if (cpRes.code !== 0) {
+      throw new Error(
+        `docker compose cp (role re-assert) failed (code ${cpRes.code}): ${cpRes.stderr.trim()}`,
+      );
+    }
+    const applyRes = await exec(
+      conn,
+      `${target.compose} exec -T db psql -U postgres -d postgres -v ON_ERROR_STOP=1 ` +
+        `-f ${paths.containerPath}`,
+    );
+    if (applyRes.code !== 0) {
+      throw new Error(
+        `restoring this instance's role passwords failed (code ${applyRes.code}): ` +
+          applyRes.stderr.trim(),
+      );
+    }
+    emit("info", `re-asserted this instance's credentials for ${present.join(", ")}`);
+  } finally {
+    await exec(conn, `${target.compose} exec -T db rm -f ${paths.containerPath}`).catch(
+      () => {},
+    );
+    await exec(conn, `rm -f ${shellQuote(paths.remotePath)}`).catch(() => {});
+  }
+}
 
 export interface LoadDumpOptions {
   /** Path of the dump INSIDE the db container. */

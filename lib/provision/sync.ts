@@ -55,6 +55,7 @@ import {
 import {
   loadDumpIntoTarget,
   pgPasswordEnv,
+  reassertInstanceRoles,
   shellQuote,
   takeSafetySnapshot,
 } from "./restore-core";
@@ -671,6 +672,19 @@ async function runSync(
           conn,
           target,
           { containerPath: mainDump, snapshotPath, label: "schema + data" },
+          emit,
+        );
+        // The data now comes from another cluster, whose roles had different
+        // credentials. Put this instance's own back, or its containers
+        // (Studio/postgres-meta, PostgREST, GoTrue, storage-api) can no
+        // longer authenticate against their own database.
+        await reassertInstanceRoles(
+          conn,
+          target,
+          {
+            remotePath: `${safeDir}/restore/roles-${ts}.sql`,
+            containerPath: `/tmp/wharf-roles-${ts}.sql`,
+          },
           emit,
         );
       });

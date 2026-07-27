@@ -38,7 +38,13 @@ import {
   runPhase,
   type ProvisionCtx,
 } from "./pipeline";
-import { loadDumpIntoTarget, pgPasswordEnv, shellQuote, takeSafetySnapshot } from "./restore-core";
+import {
+  loadDumpIntoTarget,
+  pgPasswordEnv,
+  reassertInstanceRoles,
+  shellQuote,
+  takeSafetySnapshot,
+} from "./restore-core";
 import { assertSafeRemotePath } from "./teardown";
 
 /** The connection handle lib/ssh hands out (ssh2 Client, never imported here). */
@@ -263,6 +269,19 @@ async function runRestore(
             containerPath: uploadContainerPath,
             isSql: dump.extension === ".sql",
             snapshotPath,
+          },
+          emit,
+        );
+        // An uploaded dump comes from another cluster too, so it carries the
+        // same risk as a live sync: put this instance's own role passwords
+        // back, or its containers cannot authenticate against their own
+        // database (see reassertInstanceRoles).
+        await reassertInstanceRoles(
+          conn,
+          target,
+          {
+            remotePath: `${safeDir}/restore/roles-${ts}.sql`,
+            containerPath: `/tmp/wharf-roles-${ts}.sql`,
           },
           emit,
         );

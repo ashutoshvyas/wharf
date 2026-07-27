@@ -426,6 +426,62 @@ describe("startSync — happy path", () => {
     expect(lines.join("\n")).toContain("ignoring reserved schema(s) realtime, vault");
   });
 
+  // The loaded data comes from another cluster whose roles had different
+  // credentials — without this the instance's own containers can no longer
+  // authenticate ("password authentication failed for user postgres").
+  it("re-asserts this instance's role passwords after loading foreign data", async () => {
+    const calls: string[] = [];
+    execMock.mockImplementation((_c: unknown, cmd: string) => {
+      calls.push(cmd);
+      if (cmd.includes("pg_tables")) return Promise.resolve(ok(""));
+      if (cmd.includes("pg_roles")) {
+        return Promise.resolve(ok("postgres\nauthenticator\nsupabase_auth_admin\n"));
+      }
+      return Promise.resolve(ok());
+    });
+
+    await startSync("inst-1", CTX, "clienta-prod");
+    const { lines } = await watchJob(syncJobId("inst-1"));
+
+    const write = sftpWriteMock.mock.calls.find((w) =>
+      String(w[1]).includes("roles-"),
+    ) as [unknown, string, string, number];
+    expect(write[2]).toContain("ALTER USER postgres WITH PASSWORD :'pgpass';");
+    expect(write[2]).toContain("ALTER USER authenticator WITH PASSWORD :'pgpass';");
+    expect(write[2]).toContain("ALTER USER supabase_auth_admin WITH PASSWORD :'pgpass';");
+    // Roles the instance doesn't have are left alone.
+    expect(write[2]).not.toContain("supabase_storage_admin");
+    expect(write[3]).toBe(0o600);
+
+    // The password is read from the db container's OWN environment, so it
+    // never enters the SQL, the re-assert commands, or the job log. (The
+    // dump/load commands still carry `-e PGPASSWORD=` — that is this
+    // codebase's established mechanism, documented in restore-core.ts.)
+    expect(write[2]).toContain('\\set pgpass `echo "$POSTGRES_PASSWORD"`');
+    expect(write[2]).not.toContain(TARGET_PASSWORD);
+    const roleCommands = calls.filter(
+      (c) => c.includes("wharf-roles-") || c.includes("pg_roles"),
+    );
+    expect(roleCommands.length).toBeGreaterThan(0);
+    expect(roleCommands.join("\n")).not.toContain(TARGET_PASSWORD);
+    expect(lines.join("\n")).not.toContain(TARGET_PASSWORD);
+
+    // And it happens after the data is in, not before.
+    const mainAt = calls.findIndex((c) => c.includes("--clean --if-exists"));
+    const rolesAt = calls.findIndex((c) => c.includes("wharf-roles-"));
+    expect(mainAt).toBeGreaterThanOrEqual(0);
+    expect(mainAt).toBeLessThan(rolesAt);
+    expect(lines.join("\n")).toContain("re-asserted this instance's credentials");
+  });
+
+  it("skips the role re-assert when the instance has none of them", async () => {
+    await startSync("inst-1", CTX, "clienta-prod");
+    const { status, lines } = await watchJob(syncJobId("inst-1"));
+
+    expect(status).toBe("ok");
+    expect(lines.join("\n")).toContain("no WHARF-managed roles found");
+  });
+
   it("skips the identity pass when the source has no auth tables", async () => {
     execMock.mockImplementation((_c: unknown, cmd: string) =>
       Promise.resolve(cmd.includes("pg_tables") ? ok("") : ok()),
