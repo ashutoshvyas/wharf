@@ -366,6 +366,33 @@ describe("startSync — happy path", () => {
     expect(truncateAt).toBeLessThan(mainAt);
   });
 
+  // Rows saved before the reserved-schema rule existed still carry these.
+  it("drops reserved schemas from a stored source instead of copying them", async () => {
+    const calls: string[] = [];
+    instanceFindFirst.mockResolvedValue({
+      ...ROW,
+      syncSource: {
+        ...SOURCE,
+        extraSchemas: ["realtime", "vault", "supabase_migrations", "billing"],
+      },
+    });
+    execMock.mockImplementation((_c: unknown, cmd: string) => {
+      calls.push(cmd);
+      return Promise.resolve(cmd.includes("pg_tables") ? ok("auth.users\n") : ok());
+    });
+
+    await startSync("inst-1", CTX, "clienta-prod");
+    const { lines } = await watchJob(syncJobId("inst-1"));
+
+    const dumpCmd = calls.find((c) => c.includes("pg_dump -Fc --no-owner"))!;
+    expect(dumpCmd).toContain("--schema='public'");
+    expect(dumpCmd).toContain("--schema='supabase_migrations'");
+    expect(dumpCmd).toContain("--schema='billing'");
+    expect(dumpCmd).not.toContain("--schema='realtime'");
+    expect(dumpCmd).not.toContain("--schema='vault'");
+    expect(lines.join("\n")).toContain("ignoring reserved schema(s) realtime, vault");
+  });
+
   it("skips the identity pass when the source has no auth tables", async () => {
     execMock.mockImplementation((_c: unknown, cmd: string) =>
       Promise.resolve(cmd.includes("pg_tables") ? ok("") : ok()),

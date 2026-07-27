@@ -28,6 +28,39 @@ const IDENT_RE = /^[A-Za-z0-9_$.-]+$/;
  */
 const SSL_MODES = ["disable", "allow", "prefer", "require", "verify-ca", "verify-full"] as const;
 
+/**
+ * Schemas a sync must never copy as an EXTRA schema, and why.
+ *
+ * The main dump pass runs `pg_restore --clean`, so naming one of these would
+ * drop the target's own version and replace it with the source's. Each entry
+ * is owned by something on the instance that is not the data being migrated:
+ * a container that manages its own migrations, an extension, or — for
+ * `vault` — an encryption key that lives only on this instance, which makes
+ * copied rows undecryptable ciphertext rather than data.
+ *
+ * `auth` and `storage` are here too, but they are the ones with an
+ * alternative: their DATA is copied by the two toggles instead.
+ */
+export const RESERVED_SCHEMAS: Record<string, string> = {
+  auth: "this instance's GoTrue container owns it — turn on 'Auth users' to copy its data instead",
+  storage:
+    "this instance's storage-api container owns it — turn on 'Storage objects' to copy its data instead",
+  realtime: "this instance's realtime container owns it and manages its own migrations",
+  _realtime: "created by this instance's own database init scripts",
+  _analytics: "created by this instance's own database init scripts",
+  _supavisor: "created by this instance's own database init scripts",
+  supabase_functions: "created by this instance's own database init scripts",
+  vault:
+    "its secrets are encrypted with a key that exists only on this instance, so copied rows " +
+    "would be ciphertext nothing can decrypt",
+  pgsodium: "owned by the pgsodium extension, whose key is instance-local",
+  pgsodium_masks: "owned by the pgsodium extension, whose key is instance-local",
+  extensions: "extension-owned — the target instance already provides its own",
+  graphql: "extension-owned — the target instance already provides its own",
+  graphql_public: "extension-owned — the target instance already provides its own",
+  pgbouncer: "connection-pooler state, meaningless on another host",
+};
+
 export const syncSourceSchema = z
   .object({
     kind: z.enum(["supabase", "postgres"]).default("supabase"),
@@ -97,14 +130,13 @@ export const syncSourceSchema = z
         message: "'public' is always included — remove it from extraSchemas",
       });
     }
-    for (const reserved of ["auth", "storage"]) {
-      if (v.extraSchemas.includes(reserved)) {
+    for (const schema of v.extraSchemas) {
+      const reason = RESERVED_SCHEMAS[schema];
+      if (reason) {
         ctx.addIssue({
           code: "custom",
           path: ["extraSchemas"],
-          message:
-            `'${reserved}' cannot be an extra schema — this instance owns that schema. ` +
-            `Use includeAuthUsers / includeStorageObjects to copy its DATA instead.`,
+          message: `'${schema}' cannot be an extra schema — ${reason}.`,
         });
       }
     }
@@ -116,6 +148,16 @@ export const syncSourceSchema = z
   }));
 
 export type SyncSourceInput = z.infer<typeof syncSourceSchema>;
+
+/**
+ * True for a schema the sync engine must refuse to copy. Exported because
+ * rows saved before this rule existed can still name one, so the engine
+ * re-checks a STORED source rather than trusting that it came through this
+ * schema (lib/provision/sync.ts).
+ */
+export function isReservedSchema(name: string): boolean {
+  return name === "public" || name in RESERVED_SCHEMAS;
+}
 
 /** POST /api/db-instances/:id/sync — type-the-name confirmation, like remove. */
 export const startSyncSchema = z.object({

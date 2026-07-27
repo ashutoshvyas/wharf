@@ -40,6 +40,7 @@ import { audit } from "@/lib/audit";
 import type { EmitFn } from "@/lib/bootstrap/steps";
 import { open } from "@/lib/crypto";
 import { prisma } from "@/lib/db";
+import { isReservedSchema } from "@/lib/instances/sync-source-schema";
 import { serverLockHolder, tryAcquireServerLock } from "@/lib/jobs/lock";
 import { endJob, startJob } from "@/lib/jobs/stream";
 import { exec, sftpWrite, withConnection } from "@/lib/ssh";
@@ -510,7 +511,22 @@ async function runSync(
 
       // ── dump: up to three pg_dump passes against the live source ─────────
       await runPhase(phaseOpts, "dump", async () => {
-        const schemas = ["public", ...source.extraSchemas];
+        // A source saved before the reserved-schema rule existed can still
+        // name one, and copying it would drop a schema this instance's own
+        // containers/extensions own. Drop them loudly rather than trusting
+        // the row came through the API schema.
+        const reserved = source.extraSchemas.filter(isReservedSchema);
+        if (reserved.length > 0) {
+          emit(
+            "info",
+            `ignoring reserved schema(s) ${reserved.join(", ")} — this instance owns them, ` +
+              "copying them would break its own containers. Remove them from the sync source.",
+          );
+        }
+        const schemas = [
+          "public",
+          ...source.extraSchemas.filter((s) => !isReservedSchema(s)),
+        ];
         const schemaFlags = schemas.map((s) => `--schema=${shellQuote(s)}`).join(" ");
         const mainRes = await exec(
           conn,

@@ -118,10 +118,50 @@ describe("syncSourceSchema — extra schemas", () => {
     ).toThrow(/always included/);
   });
 
-  it.each(["auth", "storage"])("rejects '%s' — this instance owns that schema", (schema) => {
+  // The main pass runs `pg_restore --clean`, so naming one of these would drop
+  // the target's own version of a schema its containers/extensions own.
+  it.each([
+    "auth",
+    "storage",
+    "realtime",
+    "_realtime",
+    "_analytics",
+    "_supavisor",
+    "supabase_functions",
+    "vault",
+    "pgsodium",
+    "pgsodium_masks",
+    "extensions",
+    "graphql",
+    "graphql_public",
+    "pgbouncer",
+  ])("rejects '%s' — the instance owns it", (schema) => {
     expect(() =>
       syncSourceSchema.parse({ ...VALID, extraSchemas: [schema] }),
     ).toThrow(/cannot be an extra schema/);
+  });
+
+  it("points auth/storage at the toggles that DO copy their data", () => {
+    expect(() => syncSourceSchema.parse({ ...VALID, extraSchemas: ["auth"] })).toThrow(
+      /Auth users/,
+    );
+    expect(() => syncSourceSchema.parse({ ...VALID, extraSchemas: ["storage"] })).toThrow(
+      /Storage objects/,
+    );
+  });
+
+  it("explains that vault secrets would arrive undecryptable", () => {
+    expect(() => syncSourceSchema.parse({ ...VALID, extraSchemas: ["vault"] })).toThrow(
+      /nothing can decrypt/,
+    );
+  });
+
+  it("still allows supabase_migrations — it is only migration history", () => {
+    const parsed = syncSourceSchema.parse({
+      ...VALID,
+      extraSchemas: ["supabase_migrations"],
+    });
+    expect(parsed.extraSchemas).toEqual(["supabase_migrations"]);
   });
 
   it("rejects a schema name with shell metacharacters", () => {
