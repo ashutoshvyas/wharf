@@ -42,6 +42,7 @@ import {
   loadDumpIntoTarget,
   pgPasswordEnv,
   reassertInstanceRoles,
+  resolveAdminUser,
   shellQuote,
   takeSafetySnapshot,
 } from "./restore-core";
@@ -219,11 +220,15 @@ async function runRestore(
     const snapshotRemotePath = `${safeDir}/backups/pre-restore-${ts}.backup`;
     const uploadContainerPath = `/tmp/wharf-restore-${ts}${dump.extension}`;
     const snapshotContainerPath = `/tmp/wharf-snapshot-${ts}.backup`;
-    const target = { compose, pgEnv: pgPasswordEnv(row.pgPassword) };
+    // Resolved once the connection is open — `postgres` is not a superuser in
+    // supabase/postgres and cannot create objects in `public` (PG15+).
+    const target = { compose, pgEnv: pgPasswordEnv(row.pgPassword), user: "postgres" };
 
     await withConnection(row.serverId, async (conn: SshConnection) => {
       // ── upload: get the dump onto the host, directories created upfront ──
       await runPhase(phaseOpts, "upload", async () => {
+        target.user = await resolveAdminUser(conn, compose);
+        emit("info", `restore operations will run as '${target.user}'`);
         const mkdirRes = await exec(
           conn,
           `mkdir -p ${shellQuote(`${safeDir}/restore`)} ${shellQuote(`${safeDir}/backups`)}`,

@@ -399,6 +399,81 @@ describe("startSync — happy path", () => {
     expect(truncateAt).toBeLessThan(mainAt);
   });
 
+  // `postgres` is not a superuser in supabase/postgres, and since PG15 cannot
+  // create objects in `public` (owned by pg_database_owner) — restoring as it
+  // silently produces an empty schema.
+  it("runs restore operations as supabase_admin, not postgres", async () => {
+    const calls: string[] = [];
+    execMock.mockImplementation((_c: unknown, cmd: string) => {
+      calls.push(cmd);
+      if (cmd.includes("select 1 from pg_roles")) return Promise.resolve(ok("1"));
+      // Order matters — the count query also mentions pg_tables.
+      if (cmd.includes("count(*) from pg_tables")) return Promise.resolve(ok("42"));
+      if (cmd.includes("pg_tables")) return Promise.resolve(ok("auth.users\n"));
+      return Promise.resolve(ok());
+    });
+
+    await startSync("inst-1", CTX, "clienta-prod");
+    const { lines } = await watchJob(syncJobId("inst-1"));
+
+    expect(calls.find((c) => c.includes("pg_restore"))).toContain("-U supabase_admin");
+    expect(calls.find((c) => c.includes("pg_dump -U"))).toContain("-U supabase_admin");
+    expect(calls.find((c) => c.includes("TRUNCATE TABLE"))).toContain("-U supabase_admin");
+    expect(lines.join("\n")).toContain("42 table(s) now in public");
+  });
+
+  it("falls back to postgres when the image has no supabase_admin", async () => {
+    const calls: string[] = [];
+    execMock.mockImplementation((_c: unknown, cmd: string) => {
+      calls.push(cmd);
+      if (cmd.includes("select 1 from pg_roles")) return Promise.resolve(ok(""));
+      return Promise.resolve(ok());
+    });
+
+    await startSync("inst-1", CTX, "clienta-prod");
+    await watchJob(syncJobId("inst-1"));
+
+    expect(calls.find((c) => c.includes("pg_restore"))).toContain("-U postgres");
+  });
+
+  // The exact failure seen in the field: pg_restore errored on every statement
+  // for lack of privileges, was tolerated as cross-environment noise, and left
+  // an empty `public` behind while the job reported success.
+  it("fails when pg_restore errored and no tables landed", async () => {
+    execMock.mockImplementation((_c: unknown, cmd: string) => {
+      if (cmd.includes("select 1 from pg_roles")) return Promise.resolve(ok("1"));
+      if (cmd.includes("pg_tables") && cmd.includes("count(*)")) return Promise.resolve(ok("0"));
+      if (cmd.includes("pg_tables")) return Promise.resolve(ok(""));
+      if (cmd.includes("pg_restore")) {
+        return Promise.resolve(fail("ERROR: permission denied for schema public"));
+      }
+      return Promise.resolve(ok());
+    });
+
+    await startSync("inst-1", CTX, "clienta-prod");
+    const { status, lines } = await watchJob(syncJobId("inst-1"));
+
+    expect(status).toBe("error");
+    expect(lines.join("\n")).toContain("nothing was restored");
+  });
+
+  it("tolerates pg_restore warnings when tables DID land", async () => {
+    execMock.mockImplementation((_c: unknown, cmd: string) => {
+      if (cmd.includes("select 1 from pg_roles")) return Promise.resolve(ok("1"));
+      if (cmd.includes("pg_tables") && cmd.includes("count(*)")) return Promise.resolve(ok("17"));
+      if (cmd.includes("pg_tables")) return Promise.resolve(ok(""));
+      if (cmd.includes("pg_restore")) {
+        return Promise.resolve(fail("WARNING: no privileges could be revoked for role x"));
+      }
+      return Promise.resolve(ok());
+    });
+
+    await startSync("inst-1", CTX, "clienta-prod");
+    const { status } = await watchJob(syncJobId("inst-1"));
+
+    expect(status).toBe("ok");
+  });
+
   // Rows saved before the reserved-schema rule existed still carry these.
   it("drops reserved schemas from a stored source instead of copying them", async () => {
     const calls: string[] = [];

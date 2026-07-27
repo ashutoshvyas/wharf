@@ -53,9 +53,11 @@ import {
   type ProvisionCtx,
 } from "./pipeline";
 import {
+  countTables,
   loadDumpIntoTarget,
   pgPasswordEnv,
   reassertInstanceRoles,
+  resolveAdminUser,
   shellQuote,
   takeSafetySnapshot,
 } from "./restore-core";
@@ -511,7 +513,9 @@ async function runSync(
   const phaseOpts = { instanceId: row.id, emit, tail };
   const compose = `docker compose -p ${row.composeProjectName}`;
   const ts = Date.now();
-  const target = { compose, pgEnv: pgPasswordEnv(row.pgPassword) };
+  // `user` is filled in during `connect`, once the container can be probed —
+  // `postgres` is not a superuser here and cannot restore into `public`.
+  const target = { compose, pgEnv: pgPasswordEnv(row.pgPassword), user: "postgres" };
   const srcEnv = pgPasswordEnv(source.password);
   const connInfo = buildConnInfo(source);
   const probeCtx = { compose, srcEnv, connInfo };
@@ -538,6 +542,8 @@ async function runSync(
    * broken.
    */
   let dataTouched = false;
+  /** Schemas the main pass was asked to load — verified afterwards. */
+  let restoredSchemas: string[] = ["public"];
 
   try {
     const safeDir = assertSafeRemotePath(row.remotePath, row.composeProjectName, "SYNC INTO");
@@ -563,6 +569,9 @@ async function runSync(
           );
         }
         emit("info", `connected — ${res.stdout.trim().split("\n")[0] ?? ""}`);
+
+        target.user = await resolveAdminUser(conn, compose);
+        emit("info", `this instance's restore operations will run as '${target.user}'`);
       });
 
       // ── dump: up to three pg_dump passes against the live source ─────────
@@ -583,6 +592,7 @@ async function runSync(
           "public",
           ...source.extraSchemas.filter((s) => !isReservedSchema(s)),
         ];
+        restoredSchemas = schemas;
         const schemaFlags = schemas.map((s) => `--schema=${shellQuote(s)}`).join(" ");
         const mainRes = await exec(
           conn,
@@ -668,12 +678,32 @@ async function runSync(
             emit,
           );
         }
-        await loadDumpIntoTarget(
+        const mainCode = await loadDumpIntoTarget(
           conn,
           target,
           { containerPath: mainDump, snapshotPath, label: "schema + data" },
           emit,
         );
+
+        // A non-zero pg_restore exit is normally just cross-environment
+        // ownership noise, so it is tolerated — but that same tolerance would
+        // hide a restore that created NOTHING (which is what happens when the
+        // connecting role cannot write to `public`). Errors plus an empty
+        // result is not noise, it is a failed restore, and saying so here is
+        // the difference between a visible failure and an empty database that
+        // looks successful.
+        const tables = await countTables(conn, target, restoredSchemas, emit);
+        if (tables >= 0) {
+          emit("info", `${tables} table(s) now in ${restoredSchemas.join(", ")}`);
+        }
+        if (mainCode !== 0 && tables === 0) {
+          throw new Error(
+            `pg_restore reported errors and no tables exist in ${restoredSchemas.join(", ")} — ` +
+              "nothing was restored. Review the pg_restore output above; the most common " +
+              `cause is the connecting role ('${target.user}') lacking rights on those ` +
+              `schemas. This instance's previous data is in ${snapshotPath}.`,
+          );
+        }
         // The data now comes from another cluster, whose roles had different
         // credentials. Put this instance's own back, or its containers
         // (Studio/postgres-meta, PostgREST, GoTrue, storage-api) can no
@@ -812,7 +842,7 @@ async function recordSyncOutcome(
 /** Clear the target's copies of `tables`, then load the data-only dump. */
 async function truncateThenLoad(
   conn: SshConnection,
-  target: { compose: string; pgEnv: string },
+  target: { compose: string; pgEnv: string; user: string },
   tables: readonly string[],
   containerPath: string,
   label: string,
@@ -820,8 +850,8 @@ async function truncateThenLoad(
 ): Promise<void> {
   const truncate = await exec(
     conn,
-    `${target.compose} exec -T ${target.pgEnv} db psql -U postgres -d postgres -v ON_ERROR_STOP=1 ` +
-      `-c ${shellQuote(truncateExistingSql(tables))}`,
+    `${target.compose} exec -T ${target.pgEnv} db psql -U ${target.user} -d postgres ` +
+      `-v ON_ERROR_STOP=1 -c ${shellQuote(truncateExistingSql(tables))}`,
     { timeoutMs: CONNECT_TIMEOUT_MS },
   );
   if (truncate.code !== 0) {
@@ -858,7 +888,7 @@ async function copyStorageObjects(
   args: {
     row: SyncRow;
     source: SyncSource;
-    target: { compose: string; pgEnv: string };
+    target: { compose: string; pgEnv: string; user: string };
     paths: { scriptPath: string; manifestPath: string; envPath: string };
   },
   emit: EmitFn,
@@ -882,7 +912,7 @@ async function copyStorageObjects(
     `where o.name is not null order by 1, 2 limit ${MAX_SYNC_OBJECTS + 1}`;
   const listRes = await exec(
     conn,
-    `${target.compose} exec -T ${target.pgEnv} db psql -U postgres -d postgres -At -c ` +
+    `${target.compose} exec -T ${target.pgEnv} db psql -U ${target.user} -d postgres -At -c ` +
       shellQuote(listSql),
     { timeoutMs: CONNECT_TIMEOUT_MS },
   );

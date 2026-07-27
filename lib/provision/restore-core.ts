@@ -59,6 +59,35 @@ export interface TargetContainer {
   compose: string;
   /** Result of {@link pgPasswordEnv} for the TARGET instance. Never logged. */
   pgEnv: string;
+  /**
+   * The role every pg_dump/pg_restore/psql below connects as — resolve it with
+   * {@link resolveAdminUser}, never hard-code `postgres`.
+   *
+   * `postgres` is NOT a superuser in supabase/postgres, and since PG15 the
+   * `public` schema is owned by `pg_database_owner` with no CREATE granted to
+   * anyone else. Restoring as `postgres` therefore fails on every CREATE
+   * statement and leaves an empty schema behind.
+   */
+  user: string;
+}
+
+/**
+ * Pick the role to run restore operations as: `supabase_admin` when the image
+ * provides it (it is the real superuser), otherwise `postgres`.
+ *
+ * The probe itself connects as `postgres` over the container's unix socket,
+ * which needs no password and works even when every TCP login is broken.
+ */
+export async function resolveAdminUser(
+  conn: SshConnection,
+  compose: string,
+): Promise<string> {
+  const res = await exec(
+    conn,
+    `${compose} exec -T db psql -U postgres -d postgres -At -c ` +
+      shellQuote(`select 1 from pg_roles where rolname = '${ADMIN_ROLE}'`),
+  );
+  return res.code === 0 && res.stdout.trim() === "1" ? ADMIN_ROLE : "postgres";
 }
 
 /**
@@ -87,7 +116,7 @@ export async function takeSafetySnapshot(
 
   const dumpRes = await exec(
     conn,
-    `${target.compose} exec -T ${target.pgEnv} db pg_dump -U postgres -Fc -d postgres ` +
+    `${target.compose} exec -T ${target.pgEnv} db pg_dump -U ${target.user} -Fc -d postgres ` +
       `-f ${paths.containerPath}`,
     { timeoutMs: SNAPSHOT_TIMEOUT_MS },
   );
@@ -122,16 +151,10 @@ export async function takeSafetySnapshot(
 export const FULL_RESTORE_FLAGS = ["--clean", "--if-exists", "--no-owner", "--no-acl"] as const;
 
 /**
- * The roles whose passwords are this INSTANCE's identity, not the source's.
- *
- * `postgres` is set by the image at initdb; the rest by the template's
- * `volumes/db/roles.sql`, which runs only once at first init. Every one of
- * them authenticates with `POSTGRES_PASSWORD` from the instance's own .env —
- * see the connection strings in templates/supabase/docker-compose.yml.
- */
-/**
  * The image's actual superuser. `postgres` is NOT one here — supautils rejects
- * it with `"…" is a reserved role, only superusers can modify it`.
+ * it with `"…" is a reserved role, only superusers can modify it`, and since
+ * PG15 it cannot create objects in `public` either (owned by
+ * `pg_database_owner`).
  */
 export const ADMIN_ROLE = "supabase_admin";
 
@@ -141,6 +164,14 @@ const REPAIR_HINT =
   `\`docker compose exec -T db psql -U ${ADMIN_ROLE} -d postgres ` +
   '-f /docker-entrypoint-initdb.d/init-scripts/99-roles.sql`, then restart the stack.';
 
+/**
+ * The roles whose passwords are this INSTANCE's identity, not the source's.
+ *
+ * `postgres` is set by the image at initdb; the rest by the template's
+ * `volumes/db/roles.sql`, which runs only once at first init. Every one of
+ * them authenticates with `POSTGRES_PASSWORD` from the instance's own .env —
+ * see the connection strings in templates/supabase/docker-compose.yml.
+ */
 export const INSTANCE_SERVICE_ROLES = [
   "postgres",
   "authenticator",
@@ -265,6 +296,31 @@ export async function reassertInstanceRoles(
   }
 }
 
+/**
+ * How many tables the target holds in `schemas`, for verifying a load actually
+ * landed. Returns -1 when the count could not be taken (never a reason to fail
+ * a restore on its own).
+ */
+export async function countTables(
+  conn: SshConnection,
+  target: TargetContainer,
+  schemas: readonly string[],
+  emit: EmitFn,
+): Promise<number> {
+  const list = schemas.map((s) => `'${s.replace(/'/g, "''")}'`).join(", ");
+  const res = await exec(
+    conn,
+    `${target.compose} exec -T db psql -U ${target.user} -d postgres -At -c ` +
+      shellQuote(`select count(*) from pg_tables where schemaname in (${list})`),
+  );
+  if (res.code !== 0) {
+    emit("info", `could not count restored tables: ${res.stderr.trim()}`);
+    return -1;
+  }
+  const n = Number.parseInt(res.stdout.trim(), 10);
+  return Number.isFinite(n) ? n : -1;
+}
+
 export interface LoadDumpOptions {
   /** Path of the dump INSIDE the db container. */
   containerPath: string;
@@ -303,8 +359,8 @@ export async function loadDumpIntoTarget(
 ): Promise<number | null> {
   const flags = opts.flags ?? FULL_RESTORE_FLAGS;
   const cmd = opts.isSql
-    ? `psql -U postgres -d postgres -f ${opts.containerPath}`
-    : `pg_restore -U postgres -d postgres ${flags.join(" ")} ${opts.containerPath}`;
+    ? `psql -U ${target.user} -d postgres -f ${opts.containerPath}`
+    : `pg_restore -U ${target.user} -d postgres ${flags.join(" ")} ${opts.containerPath}`;
 
   const res = await exec(conn, `${target.compose} exec -T ${target.pgEnv} db ${cmd}`, {
     timeoutMs: RESTORE_TIMEOUT_MS,
