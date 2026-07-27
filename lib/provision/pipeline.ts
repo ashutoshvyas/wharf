@@ -59,7 +59,7 @@ const COMPOSE_UP_TIMEOUT_MS = 180_000;
 // Defined in the dependency-free job-ids module (so crash recovery and route
 // handlers can name a job without importing this file's ssh2 graph), and
 // re-exported here because the API layer imports them from the pipeline.
-export { removeJobId, restoreJobId } from "./job-ids";
+export { removeJobId, restoreJobId, syncJobId } from "./job-ids";
 export { provisionJobId };
 
 /** Rolling tail of the job log, persisted on every phase transition. */

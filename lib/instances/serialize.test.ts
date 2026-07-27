@@ -5,8 +5,9 @@
  * ciphertext column or secret value can leak through the serializer even when
  * the row carries all four of them.
  */
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { DbInstance } from "@prisma/client";
+import { endJob, startJob } from "@/lib/jobs/stream";
 import {
   INSTANCE_INCLUDE,
   serializeInstance,
@@ -53,6 +54,8 @@ const CONTRACT_KEYS = [
   "healthCheckedAt",
   "createdAt",
   "updatedAt",
+  // Derived, not a column — which engine holds a live job.
+  "activeJob",
 ];
 
 describe("serializeInstance", () => {
@@ -124,6 +127,44 @@ describe("serializeInstance", () => {
     for (const status of ["provisioning", "running", "stopped", "error", "removing"]) {
       expect(serializeInstance({ ...fullRow(), status }).status).toBe(status);
     }
+  });
+});
+
+/**
+ * `restoring` no longer identifies which engine is running (restore
+ * and sync share it), so the DTO reports the live job id's kind instead.
+ */
+describe("activeJob", () => {
+  afterEach(() => {
+    for (const prefix of ["provision", "remove", "restore", "sync"]) {
+      endJob(`${prefix}:inst-1`, "ok");
+    }
+  });
+
+  it("is null when no job is running for this instance", () => {
+    expect(serializeInstance(fullRow()).activeJob).toBeNull();
+  });
+
+  it.each([
+    ["provision", "provision:inst-1"],
+    ["remove", "remove:inst-1"],
+    ["restore", "restore:inst-1"],
+    ["sync", "sync:inst-1"],
+  ])("reports a live %s job", (kind, jobId) => {
+    startJob(jobId);
+    expect(serializeInstance(fullRow()).activeJob).toBe(kind);
+  });
+
+  it("ignores a job belonging to a different instance", () => {
+    startJob("sync:other-instance");
+    expect(serializeInstance(fullRow()).activeJob).toBeNull();
+    endJob("sync:other-instance", "ok");
+  });
+
+  it("goes back to null once the job ends", () => {
+    startJob("sync:inst-1");
+    endJob("sync:inst-1", "ok");
+    expect(serializeInstance(fullRow()).activeJob).toBeNull();
   });
 });
 

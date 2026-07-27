@@ -75,7 +75,7 @@ describe("sweepStaleJobs", () => {
     const arg = db.dbInstance.findMany.mock.calls[0]![0] as {
       where: { status: { in: string[] }; updatedAt: { lt: Date } };
     };
-    expect(arg.where.status.in.sort()).toEqual(["provisioning", "removing"]);
+    expect(arg.where.status.in.sort()).toEqual(["provisioning", "removing", "restoring"]);
     const cutoff = arg.where.updatedAt.lt.getTime();
     expect(cutoff).toBeLessThanOrEqual(before - STALE_AFTER_MS + 5);
     expect(cutoff).toBeGreaterThan(before - STALE_AFTER_MS - 5_000);
@@ -132,6 +132,28 @@ describe("sweepStaleJobs", () => {
 
     expect(await sweepStaleJobs()).toBe(0);
     expect(db.dbInstance.update).not.toHaveBeenCalled();
+  });
+
+  // `restoring` is shared by restore.ts and sync.ts, which
+  // stream under different job ids — both must count as live.
+  it.each([
+    ["restore", "restore:inst-1"],
+    ["sync", "sync:inst-1"],
+  ])("skips a restoring row whose %s job is still live", async (_label, liveId) => {
+    db.dbInstance.findMany.mockResolvedValue([staleRow({ status: "restoring" })] as never);
+    mockActive.mockImplementation((jobId: string) => jobId === liveId);
+
+    expect(await sweepStaleJobs()).toBe(0);
+    expect(db.dbInstance.update).not.toHaveBeenCalled();
+  });
+
+  it("sweeps a restoring row that no engine is working on", async () => {
+    db.dbInstance.findMany.mockResolvedValue([staleRow({ status: "restoring" })] as never);
+
+    expect(await sweepStaleJobs()).toBe(1);
+    expect(db.dbInstance.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: "error" }) }),
+    );
   });
 
   it("sweeps only the jobless rows out of a mixed batch", async () => {

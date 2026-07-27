@@ -6,6 +6,10 @@
  * phases `upload → snapshot → restore → cleanup`, mirroring teardown.ts's
  * structure and reusing its `runPhase`/`LogTail`/`makeEmitter` helpers.
  *
+ * The Postgres side (safety snapshot, loading a dump into the target) lives in
+ * restore-core.ts, shared with sync.ts — the same pipeline fed from a live
+ * source database instead of an uploaded file.
+ *
  * SECURITY: the client-supplied filename (`X-Backup-Filename`) is used ONLY
  * to detect the file extension. It is never interpolated into a shell
  * command or a remote path — every path this module writes is generated
@@ -21,7 +25,6 @@
  */
 import AdmZip from "adm-zip";
 import { audit } from "@/lib/audit";
-import type { EmitFn } from "@/lib/bootstrap/steps";
 import { open } from "@/lib/crypto";
 import { prisma } from "@/lib/db";
 import { serverLockHolder, tryAcquireServerLock } from "@/lib/jobs/lock";
@@ -35,6 +38,7 @@ import {
   runPhase,
   type ProvisionCtx,
 } from "./pipeline";
+import { loadDumpIntoTarget, pgPasswordEnv, shellQuote, takeSafetySnapshot } from "./restore-core";
 import { assertSafeRemotePath } from "./teardown";
 
 /** The connection handle lib/ssh hands out (ssh2 Client, never imported here). */
@@ -47,13 +51,6 @@ type DumpExtension = (typeof DUMP_EXTENSIONS)[number];
 /** Refused before anything is parsed — bounds worst-case memory use (the
  * whole upload is buffered; see the module doc in the restore API route). */
 export const MAX_RESTORE_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024; // 2 GiB
-
-/** A full DB dump/restore can take a long time; these are generous on purpose. */
-const SNAPSHOT_TIMEOUT_MS = 30 * 60_000;
-const RESTORE_TIMEOUT_MS = 60 * 60_000;
-
-/** Cap on lines from pg_restore/psql's own console output copied into the job log. */
-const MAX_EMITTED_LINES = 200;
 
 function extensionOf(filename: string): string {
   const i = filename.lastIndexOf(".");
@@ -97,23 +94,6 @@ export function extractDumpBuffer(
     );
   }
   return { buffer, extension: topExt };
-}
-
-/** Single-quote a value for safe interpolation into a remote shell command. */
-function shellQuote(s: string): string {
-  return `'${s.replace(/'/g, `'\\''`)}'`;
-}
-
-/** Trim, drop blanks, cap, and emit captured command output as `info` lines. */
-function emitCapturedOutput(emit: EmitFn, text: string): void {
-  const lines = text
-    .split("\n")
-    .map((l) => l.trim())
-    .filter(Boolean);
-  for (const line of lines.slice(0, MAX_EMITTED_LINES)) emit("info", line);
-  if (lines.length > MAX_EMITTED_LINES) {
-    emit("info", `… ${lines.length - MAX_EMITTED_LINES} more line(s) truncated`);
-  }
 }
 
 export type StartRestoreResult = { jobId: string } | { busy: string } | { invalid: string };
@@ -233,7 +213,7 @@ async function runRestore(
     const snapshotRemotePath = `${safeDir}/backups/pre-restore-${ts}.backup`;
     const uploadContainerPath = `/tmp/wharf-restore-${ts}${dump.extension}`;
     const snapshotContainerPath = `/tmp/wharf-snapshot-${ts}.backup`;
-    const pgEnv = `-e PGPASSWORD=${shellQuote(row.pgPassword)}`;
+    const target = { compose, pgEnv: pgPasswordEnv(row.pgPassword) };
 
     await withConnection(row.serverId, async (conn: SshConnection) => {
       // ── upload: get the dump onto the host, directories created upfront ──
@@ -253,30 +233,12 @@ async function runRestore(
 
       // ── snapshot: pg_dump the CURRENT data before it's overwritten ───────
       await runPhase(phaseOpts, "snapshot", async () => {
-        const dumpRes = await exec(
+        snapshotPath = await takeSafetySnapshot(
           conn,
-          `${compose} exec -T ${pgEnv} db pg_dump -U postgres -Fc -d postgres ` +
-            `-f ${snapshotContainerPath}`,
-          { timeoutMs: SNAPSHOT_TIMEOUT_MS },
+          target,
+          { containerPath: snapshotContainerPath, remotePath: snapshotRemotePath },
+          emit,
         );
-        if (dumpRes.code !== 0) {
-          throw new Error(
-            `pg_dump (safety snapshot) failed (code ${dumpRes.code}): ${dumpRes.stderr.trim()}`,
-          );
-        }
-        const cpOutRes = await exec(
-          conn,
-          `${compose} cp db:${snapshotContainerPath} ${snapshotRemotePath}`,
-        );
-        if (cpOutRes.code !== 0) {
-          throw new Error(
-            `docker compose cp (safety snapshot) failed (code ${cpOutRes.code}): ` +
-              cpOutRes.stderr.trim(),
-          );
-        }
-        await exec(conn, `${compose} exec -T db rm -f ${snapshotContainerPath}`);
-        snapshotPath = snapshotRemotePath;
-        emit("info", `safety snapshot of the current data saved to ${snapshotRemotePath}`);
       });
 
       // ── restore: load the uploaded dump, replacing existing data ─────────
@@ -292,35 +254,18 @@ async function runRestore(
           );
         }
 
-        const isSql = dump.extension === ".sql";
-        const restoreCmd = isSql
-          ? `psql -U postgres -d postgres -f ${uploadContainerPath}`
-          : `pg_restore -U postgres -d postgres --clean --if-exists --no-owner --no-acl ${uploadContainerPath}`;
-        const res = await exec(conn, `${compose} exec -T ${pgEnv} db ${restoreCmd}`, {
-          timeoutMs: RESTORE_TIMEOUT_MS,
-        });
-        emitCapturedOutput(emit, `${res.stdout}\n${res.stderr}`);
-
-        // pg_restore/psql commonly exit non-zero even on a substantially
-        // successful restore — ownership/role/extension-version mismatches
-        // between the source Supabase project and this instance produce
-        // warnings pg_restore itself still reports as "errors" (a well-known,
-        // widely documented Postgres behavior, not specific to WHARF). Since
-        // this is the COMMON case for a cross-environment restore, treating
-        // any non-zero exit as a hard pipeline failure would make the
-        // feature look broken for most real backups. The pre-restore
-        // snapshot exists precisely so a genuinely bad outcome is still
-        // recoverable — surface the warning clearly and let the operator
-        // judge from the actual output above, rather than guessing here.
-        if (res.code !== 0) {
-          emit(
-            "info",
-            `${isSql ? "psql" : "pg_restore"} exited with code ${res.code} — this is ` +
-              "commonly just cross-environment ownership/role warnings, not a failed " +
-              `restore. Review the output above. The pre-restore snapshot at ` +
-              `${snapshotPath} can be used to revert if the data doesn't look right.`,
-          );
-        }
+        // A non-zero exit is surfaced as a warning, not a failure — see the
+        // doc on loadDumpIntoTarget for why that is the right call here.
+        await loadDumpIntoTarget(
+          conn,
+          target,
+          {
+            containerPath: uploadContainerPath,
+            isSql: dump.extension === ".sql",
+            snapshotPath,
+          },
+          emit,
+        );
       });
 
       // ── cleanup: drop the temp copies (the snapshot under backups/ stays) ─

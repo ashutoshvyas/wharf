@@ -10,7 +10,22 @@
  * `deletedAt` is deliberately absent too: soft-deleted rows are filtered out
  * before serialization (excluded from lists, 404 on read), so the wire shape
  * never has to express "removed".
+ *
+ * `activeJob` is the one DERIVED field: `status` alone no longer
+ * identifies which engine is running, because restore.ts and sync.ts share
+ * the `restoring` status but stream under different job ids. The fleet card
+ * needs to know which log to follow, so the job registry (in-process, same
+ * argument as lib/rate-limit.ts) is consulted here. `null` means no live job
+ * in THIS process — after a panel restart that is also the honest answer,
+ * and lib/instances/recovery.ts sweeps such rows into `error`.
  */
+import { isJobActive } from "@/lib/jobs/stream";
+import {
+  provisionJobId,
+  removeJobId,
+  restoreJobId,
+  syncJobId,
+} from "@/lib/provision/job-ids";
 
 /**
  * Prisma `include` matching the embedded `server` ref below — shared by every
@@ -49,6 +64,23 @@ export interface DbInstanceRecord {
   server?: ServerRef | null;
 }
 
+/** Which engine currently holds a live job for this instance. */
+export type ActiveJobKind = "provision" | "remove" | "restore" | "sync";
+
+const JOB_KINDS: readonly [ActiveJobKind, (id: string) => string][] = [
+  ["provision", provisionJobId],
+  ["remove", removeJobId],
+  ["restore", restoreJobId],
+  ["sync", syncJobId],
+];
+
+export function activeJobKind(instanceId: string): ActiveJobKind | null {
+  for (const [kind, jobId] of JOB_KINDS) {
+    if (isJobActive(jobId(instanceId))) return kind;
+  }
+  return null;
+}
+
 export interface SerializedDbInstance {
   id: string;
   name: string;
@@ -63,6 +95,7 @@ export interface SerializedDbInstance {
   healthCheckedAt: string | null;
   createdAt: string;
   updatedAt: string;
+  activeJob: ActiveJobKind | null;
   server?: ServerRef;
 }
 
@@ -85,6 +118,7 @@ export function serializeInstance(
       : null,
     createdAt: instance.createdAt.toISOString(),
     updatedAt: instance.updatedAt.toISOString(),
+    activeJob: activeJobKind(instance.id),
   };
   // `server` is embedded only when the relation was actually included —
   // omitted (not null) otherwise, per contract §1 ("when included").

@@ -27,6 +27,11 @@ const SECRET_TOKENS = [
   "accessPassword",
   "passwordHash",
   "plaintext",
+  // the live-sync source's own credentials.
+  "sourcePassword",
+  "sourceServiceRoleKey",
+  "srcToken",
+  "dstToken",
 ];
 
 const LOG_CALL = /\b(?:console\.(?:log|info|warn|error|debug|trace)|logger\.(?:info|warn|error|debug|trace|fatal))\s*\(/;

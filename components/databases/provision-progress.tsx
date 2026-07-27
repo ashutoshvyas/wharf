@@ -25,9 +25,9 @@ import { Button } from "@/components/ui/button";
 import { LogStream, type LogLine, type LogLineKind } from "@/components/ui/log-stream";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { useJobStream } from "@/components/servers/use-job-stream";
-import { instanceLogUrl, restoreLogUrl } from "./api";
+import { instanceLogUrl, restoreLogUrl, syncLogUrl } from "./api";
 
-export type JobKind = "provision" | "remove" | "restore";
+export type JobKind = "provision" | "remove" | "restore" | "sync";
 export type PhaseState = "pending" | "active" | "done" | "failed";
 
 interface PhaseDef {
@@ -64,6 +64,20 @@ export const RESTORE_PHASES: readonly PhaseDef[] = [
   { id: "cleanup", label: "Clean up" },
 ];
 
+/**
+ * Live-source sync phases (`connect → dump → snapshot → restore → storage →
+ * cleanup`, ). `storage` always appears — it reports itself as skipped
+ * when the source isn't copying objects — so it is not marked optional.
+ */
+export const SYNC_PHASES: readonly PhaseDef[] = [
+  { id: "connect", label: "Connect to source" },
+  { id: "dump", label: "Dump source" },
+  { id: "snapshot", label: "Snapshot current data" },
+  { id: "restore", label: "Restore" },
+  { id: "storage", label: "Copy storage objects" },
+  { id: "cleanup", label: "Clean up" },
+];
+
 export interface PhaseRow {
   id: string;
   label: string;
@@ -82,6 +96,7 @@ const GLYPH_STATE: Record<string, PhaseState> = {
 export function phaseDefs(kind: JobKind): readonly PhaseDef[] {
   if (kind === "remove") return REMOVE_PHASES;
   if (kind === "restore") return RESTORE_PHASES;
+  if (kind === "sync") return SYNC_PHASES;
   return PROVISION_PHASES;
 }
 
@@ -247,7 +262,11 @@ export function ProvisionProgress({
   className,
 }: ProvisionProgressProps) {
   const { status, lines, reconnect } = useJobStream(
-    kind === "restore" ? restoreLogUrl(instanceId) : instanceLogUrl(instanceId),
+    kind === "restore"
+      ? restoreLogUrl(instanceId)
+      : kind === "sync"
+        ? syncLogUrl(instanceId)
+        : instanceLogUrl(instanceId),
   );
   const phases = derivePhases(lines, kind);
   const handledRef = useRef(false);
@@ -272,7 +291,7 @@ export function ProvisionProgress({
     status === "streaming"
       ? kind === "remove"
         ? "removing"
-        : kind === "restore"
+        : kind === "restore" || kind === "sync"
           ? "restoring"
           : "provisioning"
       : status === "ok"
