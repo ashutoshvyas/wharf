@@ -375,6 +375,13 @@ export async function testSyncSource(instanceId: string): Promise<TestSyncSource
       }
       return { ok: true as const, detail: res.stdout.trim().split("\n")[0] ?? "connected" };
     });
+  } catch (err) {
+    // A probe whose whole job is reporting connectivity problems must not
+    // turn one into a 500. Everything up to and including the SSH hop can
+    // fail here — unreachable managed server, changed host key, missing
+    // credentials, timeout — and each is a legitimate answer of "no", with
+    // the reason the operator needs to fix it.
+    return { ok: false as const, detail: err instanceof Error ? err.message : String(err) };
   } finally {
     release();
   }

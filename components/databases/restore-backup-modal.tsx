@@ -95,13 +95,24 @@ export function RestoreBackupModal({ open, onClose, instance }: RestoreBackupMod
 
   // Only fetched while the modal is open — the payload is per-instance and
   // must never be a stale read of another instance's source.
+  //
+  // `refetchOnWindowFocus` is off here even though it is on globally
+  // (components/providers.tsx): this query backs a form the operator is
+  // typing into, and alt-tabbing away and back must not re-fetch underneath
+  // them. The prefill guards below are the real protection; this just avoids
+  // pointless work while the modal is open.
   const storedQuery = useQuery({
     queryKey: [...SYNC_SOURCE_QUERY_KEY, instance?.id],
     queryFn: () => fetchSyncSource(instance!.id),
     enabled: open && !!instance,
-    staleTime: 0,
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
   });
   const stored = storedQuery.data ?? null;
+
+  /** Prefill happens once per modal open, and never over a typed-in value. */
+  const prefilled = useRef(false);
+  const dirty = useRef(false);
 
   useEffect(() => {
     if (!open) return;
@@ -112,15 +123,21 @@ export function RestoreBackupModal({ open, onClose, instance }: RestoreBackupMod
     setStarted(null);
     setFinished(null);
     submitting.current = false;
+    prefilled.current = false;
+    dirty.current = false;
   }, [open]);
 
-  // Prefill from the saved source as soon as it lands (and only then — an
-  // operator mid-edit must not have their input replaced by a refetch).
+  // Prefill from the saved source once it lands — but never again after that,
+  // and never over something the operator has typed. Keying this on the
+  // query's `dataUpdatedAt` (as it first did) meant every background refetch
+  // — including the one `refetchOnWindowFocus` fires on alt-tab — silently
+  // reset the form mid-edit.
   useEffect(() => {
-    if (!open) return;
+    if (!open || storedQuery.isPending) return;
+    if (prefilled.current || dirty.current) return;
+    prefilled.current = true;
     setSource(stored ? stateFromDto(stored) : EMPTY_SYNC_SOURCE);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, storedQuery.dataUpdatedAt]);
+  }, [open, storedQuery.isPending, stored]);
 
   const restore = useMutation({
     mutationFn: () => restoreInstance(instance!.id, confirmText, file!),
@@ -312,7 +329,10 @@ export function RestoreBackupModal({ open, onClose, instance }: RestoreBackupMod
                 <SyncSourceForm
                   instanceId={instance.id}
                   state={source}
-                  onChange={setSource}
+                  onChange={(next) => {
+                    dirty.current = true;
+                    setSource(next);
+                  }}
                   stored={stored}
                   disabled={pending}
                 />

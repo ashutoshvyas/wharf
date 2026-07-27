@@ -564,6 +564,28 @@ describe("testSyncSource", () => {
     });
   });
 
+  it("reports an unreachable managed server as ok:false, never as a throw", async () => {
+    withConnectionMock.mockRejectedValue(new Error("connect ETIMEDOUT 203.0.113.7:22"));
+    expect(await testSyncSource("inst-1")).toEqual({
+      ok: false,
+      detail: "connect ETIMEDOUT 203.0.113.7:22",
+    });
+  });
+
+  it("reports a changed host key the same way", async () => {
+    withConnectionMock.mockRejectedValue(new Error("host key changed for srv-1"));
+    const res = await testSyncSource("inst-1");
+    expect(res).toEqual({ ok: false, detail: expect.stringContaining("host key changed") });
+  });
+
+  it("still releases the lock when the connection throws", async () => {
+    withConnectionMock.mockRejectedValue(new Error("nope"));
+    await testSyncSource("inst-1");
+    const release = tryAcquireServerLock("srv-1", "provision");
+    expect(release).not.toBeNull();
+    release?.();
+  });
+
   it("refuses when no source is configured", async () => {
     instanceFindFirst.mockResolvedValue({ ...ROW, syncSource: null });
     expect(await testSyncSource("inst-1")).toEqual({
