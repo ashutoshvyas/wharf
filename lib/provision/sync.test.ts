@@ -792,6 +792,56 @@ describe("startSync — failure handling", () => {
     expect(lines.join("\n")).toContain("pre-sync snapshot");
   });
 
+  // The database is already correct by the storage phase — only object files
+  // can be missing, which is not a reason to mark a healthy instance broken.
+  it("stays RUNNING when the restore succeeded and only storage failed", async () => {
+    instanceFindFirst.mockResolvedValue({
+      ...ROW,
+      syncSource: { ...SOURCE, includeStorageObjects: true },
+    });
+    execMock.mockImplementation((_c: unknown, cmd: string) => {
+      if (cmd.includes("select 1 from pg_roles")) return Promise.resolve(ok("1"));
+      if (cmd.includes("count(*) from pg_tables")) return Promise.resolve(ok("12"));
+      if (cmd.includes("pg_tables")) return Promise.resolve(ok("storage.objects\n"));
+      if (cmd.includes("storage.objects o join")) return Promise.resolve(fail("boom"));
+      return Promise.resolve(ok());
+    });
+
+    await startSync("inst-1", CTX, "clienta-prod");
+    const { status, lines } = await watchJob(syncJobId("inst-1"));
+
+    expect(status).toBe("error");
+    expect(instanceUpdate).toHaveBeenLastCalledWith({
+      where: { id: "inst-1" },
+      data: { status: "running", lastActionLog: expect.any(String) },
+    });
+    expect(lines.join("\n")).toContain("the database restored correctly");
+  });
+
+  it("orders the object list by real columns, not by position", async () => {
+    const calls: string[] = [];
+    instanceFindFirst.mockResolvedValue({
+      ...ROW,
+      syncSource: { ...SOURCE, includeStorageObjects: true },
+    });
+    execMock.mockImplementation((_c: unknown, cmd: string) => {
+      calls.push(cmd);
+      if (cmd.includes("select 1 from pg_roles")) return Promise.resolve(ok("1"));
+      if (cmd.includes("count(*) from pg_tables")) return Promise.resolve(ok("12"));
+      if (cmd.includes("pg_tables")) return Promise.resolve(ok("storage.objects\n"));
+      return Promise.resolve(ok());
+    });
+
+    await startSync("inst-1", CTX, "clienta-prod");
+    await watchJob(syncJobId("inst-1"));
+
+    // The select list is a single concatenated column, so `order by 1, 2`
+    // is "ORDER BY position 2 is not in select list".
+    const listCmd = calls.find((c) => c.includes("storage.objects o join"))!;
+    expect(listCmd).toContain("order by b.name, o.name");
+    expect(listCmd).not.toMatch(/order by 1, 2/);
+  });
+
   it("releases the server lock after a failure", async () => {
     execMock.mockResolvedValue(fail("nope"));
     await startSync("inst-1", CTX, "clienta-prod");

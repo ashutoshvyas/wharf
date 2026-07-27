@@ -542,6 +542,13 @@ async function runSync(
    * broken.
    */
   let dataTouched = false;
+  /**
+   * Set once the `restore` phase finishes cleanly. A failure AFTER that point
+   * (copying storage files, cleanup) leaves the database correct — only the
+   * object files are incomplete — so the instance is healthy and must not be
+   * dropped into the terminal `error` status as though its data were mangled.
+   */
+  let restoreCompleted = false;
   /** Schemas the main pass was asked to load — verified afterwards. */
   let restoredSchemas: string[] = ["public"];
 
@@ -717,6 +724,7 @@ async function runSync(
           },
           emit,
         );
+        restoreCompleted = true;
       });
 
       // ── storage: copy the actual objects source → instance ──────────────
@@ -778,19 +786,24 @@ async function runSync(
     if (!(err as { phaseReported?: boolean })?.phaseReported) {
       emit("err", message);
     }
+    const halfReplaced = dataTouched && !restoreCompleted;
     emit(
       "info",
-      dataTouched
+      halfReplaced
         ? `this instance's data was being replaced when the sync failed — it is left in ` +
             `'error' for inspection. The pre-sync snapshot at ${snapshotPath} is the way back.`
-        : "the sync failed before anything was written to this instance — its data is " +
+        : restoreCompleted
+          ? "the database restored correctly — only the step after it failed, so this " +
+            "instance stays running. Anything that step was responsible for (storage " +
+            "object files) may be missing or incomplete; re-run the sync to finish it."
+          : "the sync failed before anything was written to this instance — its data is " +
             "untouched and it stays running. Fix the problem above and sync again.",
     );
     await prisma.dbInstance
       .update({
         where: { id: row.id },
         data: {
-          status: dataTouched ? "error" : "running",
+          status: halfReplaced ? "error" : "running",
           lastActionLog: tail.text(),
         },
       })
@@ -905,11 +918,14 @@ async function copyStorageObjects(
 
   // The list comes from the TARGET, whose metadata this sync just replaced —
   // so it is exactly the set of objects the instance now expects to have.
+  // One concatenated column, so ORDER BY must name the expressions — an
+  // `order by 1, 2` here is a position that does not exist.
   const listSql =
     `select b.name || E'\\t' || o.name || E'\\t' || ` +
     `coalesce(o.metadata->>'mimetype', 'application/octet-stream') ` +
     `from storage.objects o join storage.buckets b on b.id = o.bucket_id ` +
-    `where o.name is not null order by 1, 2 limit ${MAX_SYNC_OBJECTS + 1}`;
+    `where o.name is not null and b.name is not null ` +
+    `order by b.name, o.name limit ${MAX_SYNC_OBJECTS + 1}`;
   const listRes = await exec(
     conn,
     `${target.compose} exec -T ${target.pgEnv} db psql -U ${target.user} -d postgres -At -c ` +
