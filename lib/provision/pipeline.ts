@@ -29,6 +29,7 @@ import type { EmitFn } from "@/lib/bootstrap/steps";
 import { sealBytes } from "@/lib/servers/seal-bytes";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
+import { open } from "@/lib/crypto";
 import { serverLockHolder, tryAcquireServerLock } from "@/lib/jobs/lock";
 import { endJob, publish, startJob } from "@/lib/jobs/stream";
 import { exec, sftpWrite, withConnection } from "@/lib/ssh";
@@ -36,7 +37,7 @@ import { waitForHealthy } from "./health";
 import { provisionJobId } from "./job-ids";
 import { composeProjectName, isValidSlug, remotePathFor, subdomainsFor } from "./naming";
 import { renderInstanceCompose } from "./render";
-import { generateInstanceSecrets } from "./secrets";
+import { generateInstanceSecrets, type InstanceSecrets } from "./secrets";
 import { loadStaticVolumeFiles } from "./static-volumes";
 
 /** The connection handle lib/ssh hands out (ssh2 Client, never imported here). */
@@ -152,6 +153,63 @@ interface PipelineRow {
   remotePath: string;
   apiSubdomain: string;
   studioSubdomain: string;
+  /**
+   * Secrets already stored for this instance, when there are any — retry
+   * REUSES them instead of minting new ones. See {@link resolveSecrets}.
+   */
+  existingSecrets?: InstanceSecrets | null;
+}
+
+/**
+ * Reuse this instance's stored secrets if it has them; only generate when
+ * there is nothing to reuse.
+ *
+ * Regenerating on retry is silently destructive. `docker compose up -d` does
+ * NOT re-initialise an existing Postgres volume, so a fresh POSTGRES_PASSWORD
+ * lands in `.env` and every container while `pg_authid` keeps the old one —
+ * the whole stack then fails with `password authentication failed for user
+ * "postgres"`, and the instance looks broken for a reason nothing in the log
+ * explains. Rotating `jwtSecret` compounds it: `anonKey`/`serviceRoleKey` are
+ * derived from it, so every client app holding the old keys breaks too.
+ *
+ * Reuse is also correct for the case retry was designed for — a provision
+ * that died before the volume existed re-initialises with these same values.
+ */
+export async function resolveSecrets(
+  existing: InstanceSecrets | null | undefined,
+  emit: EmitFn,
+): Promise<InstanceSecrets> {
+  if (existing) {
+    emit("info", "reusing this instance's existing secrets (retry must not rotate them)");
+    return existing;
+  }
+  const generated = await generateInstanceSecrets();
+  emit("info", "generated postgres password, JWT secret, anon + service_role keys");
+  return generated;
+}
+
+/** Decrypt a row's stored secrets, or null when it is not fully provisioned. */
+export function readStoredSecrets(row: {
+  pgPasswordEnc: Uint8Array | null;
+  jwtSecretEnc: Uint8Array | null;
+  anonKeyEnc: Uint8Array | null;
+  serviceRoleKeyEnc: Uint8Array | null;
+}): InstanceSecrets | null {
+  if (!row.pgPasswordEnc || !row.jwtSecretEnc || !row.anonKeyEnc || !row.serviceRoleKeyEnc) {
+    return null;
+  }
+  try {
+    return {
+      pgPassword: open(row.pgPasswordEnc),
+      jwtSecret: open(row.jwtSecretEnc),
+      anonKey: open(row.anonKeyEnc),
+      serviceRoleKey: open(row.serviceRoleKeyEnc),
+    };
+  } catch {
+    // Undecryptable (a rotated master key) — better to generate than to abort,
+    // and the operator sees the "generated" line rather than "reusing".
+    return null;
+  }
 }
 
 /**
@@ -183,11 +241,9 @@ async function runPipeline(
       await ensureServerPrepared(row.serverId, conn, emit, ctx);
       await persistLogTail(row.id, tail);
 
-      const generated = await runPhase(phaseOpts, "secrets", async () => {
-        const s = generateInstanceSecrets();
-        emit("info", "generated postgres password, JWT secret, anon + service_role keys");
-        return s;
-      });
+      const generated = await runPhase(phaseOpts, "secrets", async () =>
+        resolveSecrets(row.existingSecrets, emit),
+      );
 
       const rendered = await runPhase(phaseOpts, "render", async () =>
         renderInstanceCompose({
@@ -510,6 +566,8 @@ export async function retryProvision(
       remotePath: instance.remotePath,
       apiSubdomain: instance.apiSubdomain,
       studioSubdomain: instance.studioSubdomain,
+      // Retry keeps this instance's identity — see resolveSecrets.
+      existingSecrets: readStoredSecrets(instance),
     },
     ctx,
     jobId,

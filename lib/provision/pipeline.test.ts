@@ -49,14 +49,23 @@ vi.mock("./render", () => ({
   renderInstanceCompose: (...a: unknown[]) => renderMock(...a),
 }));
 
+const generateSecretsMock = vi.fn(() =>
+  Promise.resolve({
+    pgPassword: "PgPass123",
+    jwtSecret: "jwtsecret".padEnd(40, "x"),
+    anonKey: "eyJanon",
+    serviceRoleKey: "eyJservice",
+  }),
+);
 vi.mock("./secrets", () => ({
-  generateInstanceSecrets: () =>
-    Promise.resolve({
-      pgPassword: "PgPass123",
-      jwtSecret: "jwtsecret".padEnd(40, "x"),
-      anonKey: "eyJanon",
-      serviceRoleKey: "eyJservice",
-    }),
+  generateInstanceSecrets: () => generateSecretsMock(),
+}));
+
+/** Stored ciphertext decrypts to the instance's ORIGINAL secrets. */
+vi.mock("@/lib/crypto", () => ({
+  open: (buf: Uint8Array) => `stored-${Buffer.from(buf).toString()}`,
+  // sealBytes() wraps seal() — the real one needs WHARF_MASTER_KEY.
+  seal: (plaintext: string) => Buffer.from(`sealed:${plaintext}`),
 }));
 
 import { startProvision, retryProvision, stopInstance } from "./pipeline";
@@ -312,6 +321,46 @@ describe("retryProvision", () => {
     instanceFindUnique.mockResolvedValue({ ...ROW, status: "running" });
     const res = await retryProvision("inst-1", { userId: "u1", userEmail: "a@b.c" });
     expect((res as { invalid: string }).invalid).toMatch(/'error'/);
+  });
+
+  // Regenerating here is silently destructive: `up -d` does not re-init an
+  // existing Postgres volume, so a new password lands in .env while pg_authid
+  // keeps the old one and the whole stack fails to authenticate.
+  it("REUSES the stored secrets rather than minting new ones", async () => {
+    instanceFindUnique.mockResolvedValue({
+      ...ROW,
+      status: "error",
+      pgPasswordEnc: Buffer.from("pw"),
+      jwtSecretEnc: Buffer.from("jwt"),
+      anonKeyEnc: Buffer.from("anon"),
+      serviceRoleKeyEnc: Buffer.from("svc"),
+    });
+
+    await retryProvision("inst-1", { userId: "u1", userEmail: "a@b.c" });
+    const { lines } = await watchJob(provisionJobId("inst-1"));
+
+    expect(generateSecretsMock).not.toHaveBeenCalled();
+    expect(lines.join("\n")).toContain("reusing this instance's existing secrets");
+    // The rendered compose/.env must carry the ORIGINAL password.
+    const rendered = renderMock.mock.calls[0]![0] as { secrets: { pgPassword: string } };
+    expect(rendered.secrets.pgPassword).toBe("stored-pw");
+  });
+
+  it("generates secrets when the instance never stored any", async () => {
+    instanceFindUnique.mockResolvedValue({
+      ...ROW,
+      status: "error",
+      pgPasswordEnc: null,
+      jwtSecretEnc: null,
+      anonKeyEnc: null,
+      serviceRoleKeyEnc: null,
+    });
+
+    await retryProvision("inst-1", { userId: "u1", userEmail: "a@b.c" });
+    const { lines } = await watchJob(provisionJobId("inst-1"));
+
+    expect(generateSecretsMock).toHaveBeenCalled();
+    expect(lines.join("\n")).toContain("generated postgres password");
   });
 
   it("reuses the same compose project and paths", async () => {
