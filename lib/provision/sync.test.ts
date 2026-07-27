@@ -435,13 +435,21 @@ describe("startSync — happy path", () => {
       calls.push(cmd);
       if (cmd.includes("pg_tables")) return Promise.resolve(ok(""));
       if (cmd.includes("pg_roles")) {
-        return Promise.resolve(ok("postgres\nauthenticator\nsupabase_auth_admin\n"));
+        return Promise.resolve(
+          ok("supabase_admin\npostgres\nauthenticator\nsupabase_auth_admin\n"),
+        );
       }
       return Promise.resolve(ok());
     });
 
     await startSync("inst-1", CTX, "clienta-prod");
     const { lines } = await watchJob(syncJobId("inst-1"));
+
+    // Must run as supabase_admin: `postgres` is not a superuser in this image
+    // and supautils rejects it with "is a reserved role".
+    const applyCmd = calls.find((c) => c.includes("-f /tmp/wharf-roles-"))!;
+    expect(applyCmd).toContain("-U supabase_admin");
+    // supabase_admin is the actor, never one of the roles being rewritten.
 
     const write = sftpWriteMock.mock.calls.find((w) =>
       String(w[1]).includes("roles-"),
@@ -472,6 +480,33 @@ describe("startSync — happy path", () => {
     expect(mainAt).toBeGreaterThanOrEqual(0);
     expect(mainAt).toBeLessThan(rolesAt);
     expect(lines.join("\n")).toContain("re-asserted this instance's credentials");
+  });
+
+  // The data is already loaded and correct by this point — a credential
+  // problem must not throw away a good restore or strand the instance.
+  it("keeps the sync successful when the role re-assert is refused", async () => {
+    execMock.mockImplementation((_c: unknown, cmd: string) => {
+      if (cmd.includes("pg_tables")) return Promise.resolve(ok(""));
+      if (cmd.includes("pg_roles")) return Promise.resolve(ok("supabase_admin\npostgres\n"));
+      if (cmd.includes("-f /tmp/wharf-roles-")) {
+        return Promise.resolve(
+          fail('ERROR:  "supabase_storage_admin" is a reserved role, only superusers can modify it'),
+        );
+      }
+      return Promise.resolve(ok());
+    });
+
+    await startSync("inst-1", CTX, "clienta-prod");
+    const { status, lines } = await watchJob(syncJobId("inst-1"));
+
+    expect(status).toBe("ok");
+    expect(instanceUpdate).toHaveBeenCalledWith({
+      where: { id: "inst-1" },
+      data: { status: "running" },
+    });
+    const log = lines.join("\n");
+    expect(log).toContain("the DATA restored fine");
+    expect(log).toContain("99-roles.sql");
   });
 
   it("skips the role re-assert when the instance has none of them", async () => {

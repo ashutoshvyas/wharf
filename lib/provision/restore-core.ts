@@ -129,6 +129,18 @@ export const FULL_RESTORE_FLAGS = ["--clean", "--if-exists", "--no-owner", "--no
  * them authenticates with `POSTGRES_PASSWORD` from the instance's own .env —
  * see the connection strings in templates/supabase/docker-compose.yml.
  */
+/**
+ * The image's actual superuser. `postgres` is NOT one here — supautils rejects
+ * it with `"…" is a reserved role, only superusers can modify it`.
+ */
+export const ADMIN_ROLE = "supabase_admin";
+
+/** Printed whenever the automatic re-assert could not complete. */
+const REPAIR_HINT =
+  "Repair by hand on the server: cd into the instance directory and run " +
+  `\`docker compose exec -T db psql -U ${ADMIN_ROLE} -d postgres ` +
+  '-f /docker-entrypoint-initdb.d/init-scripts/99-roles.sql`, then restart the stack.';
+
 export const INSTANCE_SERVICE_ROLES = [
   "postgres",
   "authenticator",
@@ -153,6 +165,23 @@ export const INSTANCE_SERVICE_ROLES = [
  * disturb a role, this re-asserts the invariant afterwards: the roles above
  * always end a restore holding the password in this instance's .env.
  *
+ * RUN AS `supabase_admin`, NOT `postgres`. In supabase/postgres the `postgres`
+ * role is not a real superuser, and the `supautils` extension marks the
+ * service roles reserved:
+ *
+ *   ERROR: "supabase_storage_admin" is a reserved role, only superusers can
+ *   modify it
+ *
+ * `supabase_admin` is the superuser the image actually uses (realtime connects
+ * as it, `webhooks.sql` creates schemas owned by it). `roles.sql` gets away
+ * with `postgres` only because the entrypoint runs it during initdb, before
+ * those restrictions apply.
+ *
+ * NON-FATAL. By the time this runs the data is already loaded and correct, so
+ * a failure here must not throw away a successful restore or push a healthy
+ * instance into the terminal `error` status. It reports loudly instead, with
+ * the exact command to repair it by hand.
+ *
  * SECRETS: the password is never written into the SQL, the command line, or
  * an error message. The generated script reads `$POSTGRES_PASSWORD` from the
  * db container's own environment through psql's backtick interpolation — the
@@ -165,25 +194,29 @@ export async function reassertInstanceRoles(
   paths: { remotePath: string; containerPath: string },
   emit: EmitFn,
 ): Promise<void> {
-  const wanted = INSTANCE_SERVICE_ROLES.map((r) => `'${r}'`).join(", ");
+  const wanted = [...INSTANCE_SERVICE_ROLES, ADMIN_ROLE].map((r) => `'${r}'`).join(", ");
   const listRes = await exec(
     conn,
     `${target.compose} exec -T db psql -U postgres -d postgres -At -c ` +
       shellQuote(`select rolname from pg_roles where rolname in (${wanted})`),
   );
   if (listRes.code !== 0) {
-    throw new Error(
-      `could not list this instance's roles (code ${listRes.code}): ${listRes.stderr.trim()}`,
+    emit(
+      "info",
+      `could not list this instance's roles (code ${listRes.code}): ${listRes.stderr.trim()} — ` +
+        `skipping the credential re-assert. ${REPAIR_HINT}`,
     );
+    return;
   }
-  const present = listRes.stdout
-    .split("\n")
-    .map((l) => l.trim())
-    .filter((l): l is string => (INSTANCE_SERVICE_ROLES as readonly string[]).includes(l));
+  const found = new Set(listRes.stdout.split("\n").map((l) => l.trim()).filter(Boolean));
+  const present = INSTANCE_SERVICE_ROLES.filter((r) => found.has(r));
   if (present.length === 0) {
     emit("info", "no WHARF-managed roles found to re-assert — skipping");
     return;
   }
+  // Falling back to `postgres` is very likely to hit supautils' reserved-role
+  // guard, but it is strictly better than not trying at all.
+  const adminUser = found.has(ADMIN_ROLE) ? ADMIN_ROLE : "postgres";
 
   // Role names come from the constant above, never from user input.
   const sql =
@@ -198,22 +231,32 @@ export async function reassertInstanceRoles(
       `${target.compose} cp ${paths.remotePath} db:${paths.containerPath}`,
     );
     if (cpRes.code !== 0) {
-      throw new Error(
-        `docker compose cp (role re-assert) failed (code ${cpRes.code}): ${cpRes.stderr.trim()}`,
+      emit(
+        "info",
+        `docker compose cp (role re-assert) failed (code ${cpRes.code}): ` +
+          `${cpRes.stderr.trim()} — ${REPAIR_HINT}`,
       );
+      return;
     }
     const applyRes = await exec(
       conn,
-      `${target.compose} exec -T db psql -U postgres -d postgres -v ON_ERROR_STOP=1 ` +
+      `${target.compose} exec -T db psql -U ${adminUser} -d postgres -v ON_ERROR_STOP=1 ` +
         `-f ${paths.containerPath}`,
     );
     if (applyRes.code !== 0) {
-      throw new Error(
-        `restoring this instance's role passwords failed (code ${applyRes.code}): ` +
-          applyRes.stderr.trim(),
+      // Non-fatal on purpose: the data is already loaded and correct.
+      emit(
+        "info",
+        `could not restore this instance's role passwords as '${adminUser}' ` +
+          `(code ${applyRes.code}): ${applyRes.stderr.trim()} — the DATA restored fine, but ` +
+          `Studio/PostgREST/Auth may not be able to log in until this is fixed. ${REPAIR_HINT}`,
       );
+      return;
     }
-    emit("info", `re-asserted this instance's credentials for ${present.join(", ")}`);
+    emit(
+      "info",
+      `re-asserted this instance's credentials for ${present.join(", ")} (as ${adminUser})`,
+    );
   } finally {
     await exec(conn, `${target.compose} exec -T db rm -f ${paths.containerPath}`).catch(
       () => {},
