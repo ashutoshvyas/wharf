@@ -72,6 +72,19 @@ export async function takeSafetySnapshot(
   paths: { containerPath: string; remotePath: string },
   emit: EmitFn,
 ): Promise<string> {
+  // `docker compose cp` refuses to create its destination directory
+  // ("invalid output path: directory ... does not exist"), so this function
+  // makes it — rather than relying on a caller having done it. restore.ts
+  // happens to create it in its `upload` phase; sync.ts has no upload phase
+  // and would otherwise fail here every time.
+  const dir = paths.remotePath.slice(0, paths.remotePath.lastIndexOf("/"));
+  const mkdirRes = await exec(conn, `mkdir -p ${shellQuote(dir)}`);
+  if (mkdirRes.code !== 0) {
+    throw new Error(
+      `mkdir -p ${dir} failed (code ${mkdirRes.code}): ${mkdirRes.stderr.trim()}`,
+    );
+  }
+
   const dumpRes = await exec(
     conn,
     `${target.compose} exec -T ${target.pgEnv} db pg_dump -U postgres -Fc -d postgres ` +

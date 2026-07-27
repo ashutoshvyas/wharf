@@ -369,6 +369,13 @@ describe("startSync — happy path", () => {
     // The main pass replaces the existing objects.
     expect(transcript).toContain("pg_restore -U postgres -d postgres --clean --if-exists");
 
+    // `docker compose cp` will not create its destination directory, and sync
+    // has no upload phase to have made it earlier.
+    const mkdirAt = calls.findIndex((c) => c.includes("mkdir -p") && c.includes("/backups"));
+    const cpAt = calls.findIndex((c) => c.includes("cp db:/tmp/wharf-snapshot-"));
+    expect(mkdirAt).toBeGreaterThanOrEqual(0);
+    expect(mkdirAt).toBeLessThan(cpAt);
+
     const snapshotAt = calls.findIndex((c) => c.includes("pre-sync-"));
     const restoreAt = calls.findIndex((c) => c.includes("--clean --if-exists"));
     expect(snapshotAt).toBeGreaterThanOrEqual(0);
@@ -559,7 +566,8 @@ describe("startSync — storage objects", () => {
 });
 
 describe("startSync — failure handling", () => {
-  it("marks the instance errored and audits the failure when the source refuses", async () => {
+  // The JOB fails, but the instance was never touched — it stays running.
+  it("audits the failure when the source refuses, without breaking the instance", async () => {
     execMock.mockImplementation((_c: unknown, cmd: string) =>
       Promise.resolve(cmd.includes("psql") ? fail("password authentication failed") : ok()),
     );
@@ -571,13 +579,51 @@ describe("startSync — failure handling", () => {
     expect(lines.join("\n")).toContain("password authentication failed");
     expect(instanceUpdate).toHaveBeenLastCalledWith({
       where: { id: "inst-1" },
-      data: { status: "error", lastActionLog: expect.any(String) },
+      data: { status: "running", lastActionLog: expect.any(String) },
     });
     expect(
       auditMock.mock.calls.some(
         (c) => (c[0] as { action: string }).action === "instance.sync.failed",
       ),
     ).toBe(true);
+  });
+
+  // `error` is terminal until an explicit retry or remove, so it must be
+  // reserved for an instance that actually needs looking at.
+  it("leaves the instance RUNNING when it fails before any data is written", async () => {
+    execMock.mockImplementation((_c: unknown, cmd: string) =>
+      Promise.resolve(cmd.includes("cp db:") ? fail("directory does not exist") : ok()),
+    );
+
+    await startSync("inst-1", CTX, "clienta-prod");
+    const { status, lines } = await watchJob(syncJobId("inst-1"));
+
+    expect(status).toBe("error");
+    expect(instanceUpdate).toHaveBeenLastCalledWith({
+      where: { id: "inst-1" },
+      data: { status: "running", lastActionLog: expect.any(String) },
+    });
+    expect(lines.join("\n")).toContain("its data is untouched");
+  });
+
+  // Note pg_restore exiting non-zero is NOT a failure here by design (see
+  // loadDumpIntoTarget) — the TRUNCATE that precedes a data-only pass is,
+  // and by then the replacement is under way.
+  it("leaves the instance in ERROR when it fails mid-replacement", async () => {
+    execMock.mockImplementation((_c: unknown, cmd: string) => {
+      if (cmd.includes("pg_tables")) return Promise.resolve(ok("auth.users\n"));
+      if (cmd.includes("TRUNCATE TABLE")) return Promise.resolve(fail("permission denied"));
+      return Promise.resolve(ok());
+    });
+
+    await startSync("inst-1", CTX, "clienta-prod");
+    const { lines } = await watchJob(syncJobId("inst-1"));
+
+    expect(instanceUpdate).toHaveBeenLastCalledWith({
+      where: { id: "inst-1" },
+      data: { status: "error", lastActionLog: expect.any(String) },
+    });
+    expect(lines.join("\n")).toContain("pre-sync snapshot");
   });
 
   it("releases the server lock after a failure", async () => {

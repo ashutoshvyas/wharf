@@ -526,6 +526,17 @@ async function runSync(
   let authTables: string[] = [];
   let storageTables: string[] = [];
   let summary = "";
+  /**
+   * Whether anything has been written to the instance's DATABASE yet.
+   *
+   * `connect`, `dump` and `snapshot` only read the source and write scratch
+   * files; the instance's own data is untouched until the `restore` phase
+   * starts. Failing before that point must NOT strand a perfectly healthy
+   * instance in `error` — that status is terminal until an explicit retry or
+   * remove, so it would make the operator repair something that was never
+   * broken.
+   */
+  let dataTouched = false;
 
   try {
     const safeDir = assertSafeRemotePath(row.remotePath, row.composeProjectName, "SYNC INTO");
@@ -642,6 +653,7 @@ async function runSync(
 
       // ── restore: identity → storage metadata → main (see the module doc) ─
       await runPhase(phaseOpts, "restore", async () => {
+        dataTouched = true;
         if (authTables.length > 0) {
           await truncateThenLoad(conn, target, authTables, authDump, "identity data", emit);
         }
@@ -722,10 +734,21 @@ async function runSync(
     if (!(err as { phaseReported?: boolean })?.phaseReported) {
       emit("err", message);
     }
+    emit(
+      "info",
+      dataTouched
+        ? `this instance's data was being replaced when the sync failed — it is left in ` +
+            `'error' for inspection. The pre-sync snapshot at ${snapshotPath} is the way back.`
+        : "the sync failed before anything was written to this instance — its data is " +
+            "untouched and it stays running. Fix the problem above and sync again.",
+    );
     await prisma.dbInstance
       .update({
         where: { id: row.id },
-        data: { status: "error", lastActionLog: tail.text() },
+        data: {
+          status: dataTouched ? "error" : "running",
+          lastActionLog: tail.text(),
+        },
       })
       .catch((dbErr: unknown) => {
         console.error(`[sync] failed to mark ${row.id} errored:`, dbErr);
