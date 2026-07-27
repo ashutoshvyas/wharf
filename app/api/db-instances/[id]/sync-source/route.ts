@@ -105,21 +105,30 @@ export const PUT = withErrorHandling(async (req: Request, { params }: Ctx) => {
     extraSchemas: body.extraSchemas,
   };
 
-  const row = await prisma.instanceSyncSource.upsert({
-    where: { dbInstanceId: id },
-    create: {
-      dbInstanceId: id,
-      ...common,
-      // Guarded above: on create the schema-stripped password is always here.
-      pgPasswordEnc: sealBytes(body.pgPassword!),
-      ...(body.serviceRoleKey ? { serviceRoleKeyEnc: sealBytes(body.serviceRoleKey) } : {}),
-    },
-    update: {
-      ...common,
-      ...(body.pgPassword ? { pgPasswordEnc: sealBytes(body.pgPassword) } : {}),
-      ...(body.serviceRoleKey ? { serviceRoleKeyEnc: sealBytes(body.serviceRoleKey) } : {}),
-    },
-  });
+  // Seal ONCE, up front. `upsert` builds both its `create` and `update`
+  // objects eagerly in JS — it cannot know which one the database will use —
+  // so a `sealBytes(body.pgPassword!)` sitting in the `create` branch still
+  // runs when the row already exists and the password was left blank to mean
+  // "keep the stored one". That threw ERR_INVALID_ARG_TYPE from the cipher
+  // and surfaced as a 500 on every re-save.
+  const secrets = {
+    ...(body.pgPassword ? { pgPasswordEnc: sealBytes(body.pgPassword) } : {}),
+    ...(body.serviceRoleKey ? { serviceRoleKeyEnc: sealBytes(body.serviceRoleKey) } : {}),
+  };
+
+  // With a password in hand both branches are valid, so the write stays a
+  // single atomic upsert. Without one there is nothing to create — the guard
+  // above already rejected that case — so it can only be an update.
+  const row = body.pgPassword
+    ? await prisma.instanceSyncSource.upsert({
+        where: { dbInstanceId: id },
+        create: { dbInstanceId: id, ...common, ...secrets, pgPasswordEnc: secrets.pgPasswordEnc! },
+        update: { ...common, ...secrets },
+      })
+    : await prisma.instanceSyncSource.update({
+        where: { dbInstanceId: id },
+        data: { ...common, ...secrets },
+      });
 
   await audit({
     userId: session.user.id,
