@@ -28,6 +28,9 @@ vi.mock("@/lib/db", () => ({
 const auditMock = vi.fn((..._a: unknown[]) => Promise.resolve());
 vi.mock("@/lib/audit", () => ({ audit: (...a: unknown[]) => auditMock(...a) }));
 
+/** Flipped on to simulate a WHARF_MASTER_KEY that cannot open a stored value. */
+let decryptFails = false;
+
 /** Every sealed column decrypts to a value we can grep the transcript for. */
 const SOURCE_PASSWORD = "s0urce-p4ssw0rd";
 const SOURCE_SERVICE_KEY = "src-service-role-key";
@@ -35,6 +38,9 @@ const TARGET_PASSWORD = "target-pg-password";
 const TARGET_SERVICE_KEY = "dst-service-role-key";
 vi.mock("@/lib/crypto", () => ({
   open: (buf: Buffer) => {
+    if (decryptFails) {
+      throw new Error("Unsupported state or unable to authenticate data");
+    }
     const tag = buf.toString();
     if (tag === "src-pw") return SOURCE_PASSWORD;
     if (tag === "src-key") return SOURCE_SERVICE_KEY;
@@ -113,6 +119,7 @@ function phases(lines: string[]): string[] {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  decryptFails = false;
   instanceFindFirst.mockResolvedValue({ ...ROW });
   instanceUpdate.mockResolvedValue({ ...ROW });
   syncSourceUpdate.mockResolvedValue({});
@@ -267,6 +274,25 @@ describe("startSync — validation", () => {
     expect(await startSync("inst-1", CTX, "clienta-prod")).toEqual({
       invalid: expect.stringContaining("no stored service_role key"),
     });
+  });
+
+  // Decrypting used to happen after the lock was taken and the row flipped to
+  // `restoring`, so a throw stranded the instance with no job behind it.
+  it("reports an undecryptable stored credential instead of throwing", async () => {
+    decryptFails = true;
+    expect(await startSync("inst-1", CTX, "clienta-prod")).toEqual({
+      invalid: expect.stringContaining("could not be decrypted"),
+    });
+  });
+
+  it("leaves the lock free and the status untouched when decryption fails", async () => {
+    decryptFails = true;
+    await startSync("inst-1", CTX, "clienta-prod");
+
+    expect(instanceUpdate).not.toHaveBeenCalled();
+    const release = tryAcquireServerLock("srv-1", "provision");
+    expect(release).not.toBeNull();
+    release?.();
   });
 
   it("never touches the server on a validation failure", async () => {
@@ -611,6 +637,14 @@ describe("testSyncSource", () => {
     const release = tryAcquireServerLock("srv-1", "provision");
     expect(release).not.toBeNull();
     release?.();
+  });
+
+  it("reports an undecryptable credential as ok:false, not a 500", async () => {
+    decryptFails = true;
+    expect(await testSyncSource("inst-1")).toEqual({
+      ok: false,
+      detail: expect.stringContaining("could not be decrypted"),
+    });
   });
 
   it("refuses when no source is configured", async () => {

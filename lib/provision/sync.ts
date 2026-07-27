@@ -213,6 +213,27 @@ echo "DONE ok=$ok failed=$failed"
 `;
 }
 
+/**
+ * Turn a failed `open()` into something an operator can act on.
+ *
+ * Decryption fails for exactly one class of reason — the value was sealed
+ * under a different WHARF_MASTER_KEY than the one this process holds (a
+ * rotation that missed this row, a restored backup paired with the wrong
+ * key, or the env var pointing somewhere new). That is an operational
+ * condition, not a bug, and surfacing it as an opaque 500 sends the operator
+ * hunting through logs for a one-line answer. The underlying message is
+ * included but never the value.
+ */
+function describeDecryptFailure(err: unknown): string {
+  const detail = err instanceof Error ? err.message : String(err);
+  return (
+    "The stored credentials for this sync source could not be decrypted " +
+    `(${detail}). They were sealed with a different WHARF_MASTER_KEY than this ` +
+    "panel is using — re-enter the source password (and service_role key, if set) " +
+    "and save it again."
+  );
+}
+
 export type StartSyncResult = { jobId: string } | { busy: string } | { invalid: string };
 
 /**
@@ -251,20 +272,36 @@ export async function startSync(
     return { invalid: "No sync source is configured for this instance." };
   }
 
-  const source: SyncSource = {
-    kind: stored.kind,
-    host: stored.pgHost,
-    port: stored.pgPort,
-    database: stored.pgDatabase,
-    user: stored.pgUser,
-    password: open(stored.pgPasswordEnc),
-    sslMode: stored.pgSslMode,
-    projectUrl: stored.projectUrl,
-    serviceRoleKey: stored.serviceRoleKeyEnc ? open(stored.serviceRoleKeyEnc) : null,
-    includeAuthUsers: stored.includeAuthUsers,
-    includeStorageObjects: stored.includeStorageObjects,
-    extraSchemas: stored.extraSchemas,
-  };
+  // Decrypt EVERY secret before the lock is taken and the row is flipped to
+  // `restoring`: a throw after that point would leak the lock and strand the
+  // instance mid-status with no job behind it. A failure here is also a real
+  // operational condition (a rotated or mismatched WHARF_MASTER_KEY), not a
+  // crash, so it comes back as a message the operator can act on.
+  let source: SyncSource;
+  let targetPgPassword: string;
+  let targetServiceRoleKey: string | null;
+  try {
+    source = {
+      kind: stored.kind,
+      host: stored.pgHost,
+      port: stored.pgPort,
+      database: stored.pgDatabase,
+      user: stored.pgUser,
+      password: open(stored.pgPasswordEnc),
+      sslMode: stored.pgSslMode,
+      projectUrl: stored.projectUrl,
+      serviceRoleKey: stored.serviceRoleKeyEnc ? open(stored.serviceRoleKeyEnc) : null,
+      includeAuthUsers: stored.includeAuthUsers,
+      includeStorageObjects: stored.includeStorageObjects,
+      extraSchemas: stored.extraSchemas,
+    };
+    targetPgPassword = open(instance.pgPasswordEnc);
+    targetServiceRoleKey = instance.serviceRoleKeyEnc
+      ? open(instance.serviceRoleKeyEnc)
+      : null;
+  } catch (err) {
+    return { invalid: describeDecryptFailure(err) };
+  }
 
   if (source.includeStorageObjects) {
     if (!source.projectUrl || !source.serviceRoleKey) {
@@ -307,8 +344,8 @@ export async function startSync(
       composeProjectName: instance.composeProjectName,
       remotePath: instance.remotePath,
       apiSubdomain: instance.apiSubdomain,
-      pgPassword: open(instance.pgPasswordEnc),
-      serviceRoleKey: instance.serviceRoleKeyEnc ? open(instance.serviceRoleKeyEnc) : null,
+      pgPassword: targetPgPassword,
+      serviceRoleKey: targetServiceRoleKey,
     },
     source,
     ctx,
@@ -357,7 +394,14 @@ export async function testSyncSource(instanceId: string): Promise<TestSyncSource
     user: stored.pgUser,
     sslMode: stored.pgSslMode,
   });
-  const srcEnv = pgPasswordEnv(open(stored.pgPasswordEnc));
+  // Decrypting can fail (see describeDecryptFailure) — for a probe that is an
+  // answer, not a crash.
+  let srcEnv: string;
+  try {
+    srcEnv = pgPasswordEnv(open(stored.pgPasswordEnc));
+  } catch (err) {
+    return { ok: false, detail: describeDecryptFailure(err) };
+  }
   const compose = `docker compose -p ${instance.composeProjectName}`;
 
   const release = tryAcquireServerLock(instance.serverId, "sync-test");
