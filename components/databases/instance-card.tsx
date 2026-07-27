@@ -115,7 +115,7 @@ export function InstanceCard({
     ...(instance.status === "running" && canRestore
       ? [
           {
-            label: "Restore backup…",
+            label: "Restore / Sync…",
             icon: <Upload size={15} strokeWidth={1.75} />,
             onSelect: onRestore,
           } satisfies DropdownItem,
@@ -193,11 +193,15 @@ export function InstanceCard({
         <ProvisionProgress
           instanceId={instance.id}
           kind={
-            instance.status === "removing"
+            // `restoring` covers both restore and sync, so the live job id
+            // reported by the API decides which log to follow;
+            // status is the fallback for an older payload.
+            instance.activeJob ??
+            (instance.status === "removing"
               ? "remove"
               : instance.status === "restoring"
                 ? "restore"
-                : "provision"
+                : "provision")
           }
           title={`${instance.composeProjectName} · ${serverName}`}
           compact
@@ -223,12 +227,13 @@ export function InstanceCard({
                 variant: status === "ok" ? "info" : "danger",
               });
             } else if (instance.status === "restoring") {
+              const verb = instance.activeJob === "sync" ? "sync" : "restore";
               toast({
-                title: status === "ok" ? "Restored" : undefined,
+                title: status === "ok" ? (verb === "sync" ? "Synced" : "Restored") : undefined,
                 message:
                   status === "ok"
-                    ? `${instance.name} restored — a snapshot of its previous data was kept on the server.`
-                    : `${instance.name} restore failed — see log.`,
+                    ? `${instance.name} ${verb === "sync" ? "synced" : "restored"} — a snapshot of its previous data was kept on the server.`
+                    : `${instance.name} ${verb} failed — see log.`,
                 variant: status === "ok" ? "success" : "danger",
               });
             } else {

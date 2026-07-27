@@ -103,6 +103,7 @@ model DbInstance {
   authSettings      InstanceAuthSettings?
   emailTemplates    InstanceEmailTemplate[]
   analyticsSettings InstanceAnalyticsSettings?
+  syncSource        InstanceSyncSource?
 
   @@unique([serverId, remotePath])
   @@map("db_instances")
@@ -237,6 +238,77 @@ model InstanceAnalyticsSettings {
   dbInstance DbInstance @relation(fields: [dbInstanceId], references: [id], onDelete: Cascade)
 
   @@map("instance_analytics_settings")
+}
+
+/**
+ * Where a live-database sync pulls FROM.
+ *
+ * `supabase` means a hosted Supabase project: the Postgres columns below are
+ * still the ones that carry the dump (there is no dump API), `projectUrl` +
+ * `serviceRoleKeyEnc` exist only so storage OBJECTS can be copied over the
+ * Storage HTTP API. `postgres` is any other Postgres (Neon, RDS, another
+ * WHARF instance) — storage copying is simply unavailable there.
+ */
+enum SyncSourceKind {
+  supabase
+  postgres
+}
+
+/**
+ * Saved source for "sync from a live database" — the second source
+ * for the restore engine, alongside an uploaded dump file.
+ *
+ * 1:1 with the instance and stored (rather than used once and discarded) so a
+ * migration can be re-run on demand without re-typing credentials; that is
+ * the whole point of calling it a sync. Same discrete-`*Enc`-column
+ * convention as InstanceAuthSettings — never a JSON secret blob.
+ *
+ * The credentials here grant full READ of the source project, so every route
+ * that touches this row is admin-only (`instance.restore` in lib/rbac.ts) and
+ * neither secret is ever echoed back on a read — only a `*Configured`
+ * boolean, the same rule as InstanceSecretsDto.
+ *
+ * `pgHost`/`pgUser`/`pgDatabase`/`pgSslMode` are re-validated against a
+ * conservative charset at the API boundary (lib/instances/sync-source-schema.ts)
+ * because they are interpolated into a connection string that reaches a remote
+ * shell — shell-quoting in lib/provision/sync.ts is the second layer, not the
+ * only one.
+ */
+model InstanceSyncSource {
+  id           String         @id @default(uuid())
+  dbInstanceId String         @unique @map("db_instance_id")
+  kind         SyncSourceKind @default(supabase)
+  label        String?
+
+  // Postgres connection — used for every dump pass regardless of `kind`.
+  pgHost        String @map("pg_host")
+  pgPort        Int    @default(5432) @map("pg_port")
+  pgDatabase    String @default("postgres") @map("pg_database")
+  pgUser        String @map("pg_user")
+  pgPasswordEnc Bytes  @map("pg_password_enc")
+  pgSslMode     String @default("require") @map("pg_ssl_mode")
+
+  // Supabase-only extras — required to copy storage objects, unused otherwise.
+  projectUrl        String? @map("project_url")
+  serviceRoleKeyEnc Bytes?  @map("service_role_key_enc")
+
+  // What a sync copies. The main pass (schema + data) always runs; these two
+  // are data-only passes over tables the target already owns the schema of.
+  includeAuthUsers      Boolean  @default(true) @map("include_auth_users")
+  includeStorageObjects Boolean  @default(false) @map("include_storage_objects")
+  extraSchemas          String[] @map("extra_schemas")
+
+  // Last outcome, shown in the modal so a re-sync has context.
+  lastSyncedAt    DateTime? @map("last_synced_at")
+  lastSyncStatus  String?   @map("last_sync_status")
+  lastSyncSummary String?   @map("last_sync_summary")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  dbInstance DbInstance @relation(fields: [dbInstanceId], references: [id], onDelete: Cascade)
+
+  @@map("instance_sync_sources")
 }
 
 model PanelUser {

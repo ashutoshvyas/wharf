@@ -4,7 +4,8 @@
  * The provisioning engine runs in-process, so a panel restart mid-job leaves
  * two kinds of debris:
  *
- *  1. DB rows stuck in `provisioning` / `removing` with no job behind them —
+ *  1. DB rows stuck in `provisioning` / `removing` / `restoring` with no job
+ *     behind them —
  *     the in-memory job registry (lib/jobs/stream) died with the process.
  *     {@link sweepStaleJobs} marks those `error` with an "interrupted" note so
  *     the row becomes actionable again (Retry re-runs the idempotent pipeline).
@@ -19,7 +20,7 @@
 import { audit } from "@/lib/audit";
 import { prisma } from "@/lib/db";
 import { isJobActive } from "@/lib/jobs/stream";
-import { provisionJobId, removeJobId } from "@/lib/provision/job-ids";
+import { provisionJobId, removeJobId, restoreJobId, syncJobId } from "@/lib/provision/job-ids";
 
 /** A job untouched for this long with no live stream is presumed dead. */
 export const STALE_AFTER_MS = 10 * 60 * 1000;
@@ -46,7 +47,10 @@ export async function sweepStaleJobs(): Promise<number> {
 
   const candidates = await prisma.dbInstance.findMany({
     where: {
-      status: { in: ["provisioning", "removing"] },
+      // `restoring` covers both engines that overwrite data in place —
+      // restore.ts and sync.ts share the status, and each
+      // has its own job id, so both are checked for liveness below.
+      status: { in: ["provisioning", "removing", "restoring"] },
       updatedAt: { lt: cutoff },
     },
     select: { id: true, status: true, lastActionLog: true },
@@ -54,9 +58,10 @@ export async function sweepStaleJobs(): Promise<number> {
 
   let swept = 0;
   for (const row of candidates) {
-    if (isJobActive(provisionJobId(row.id)) || isJobActive(removeJobId(row.id))) {
-      continue;
-    }
+    const live = [provisionJobId, removeJobId, restoreJobId, syncJobId].some((jobId) =>
+      isJobActive(jobId(row.id)),
+    );
+    if (live) continue;
     try {
       await prisma.dbInstance.update({
         where: { id: row.id },

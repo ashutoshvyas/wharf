@@ -44,6 +44,12 @@ export interface InstanceDto {
   apiSubdomain: string;
   studioSubdomain: string;
   status: InstanceStatus;
+  /**
+   * Which engine currently holds a live job — `restoring` alone is
+   * ambiguous, since restore and sync share it but stream different logs.
+   * `null` when nothing is running (including after a panel restart).
+   */
+  activeJob: "provision" | "remove" | "restore" | "sync" | null;
   /** Tail of the last action's log — errors keep their evidence (design §6). */
   lastActionLog: string | null;
   healthCheckedAt: string | null;
@@ -185,6 +191,53 @@ export interface AnalyticsSettingsDto {
 export interface AnalyticsSettingsPatchResultDto extends AnalyticsSettingsDto {
   applied: boolean;
   applyError?: string;
+}
+
+/**
+ * GET/PUT /api/db-instances/:id/sync-source — where a live-database
+ * sync pulls FROM. Secrets are never echoed, only `*Configured` booleans,
+ * same rule as InstanceSecretsDto.
+ */
+export interface SyncSourceDto {
+  kind: "supabase" | "postgres";
+  label: string;
+  pgHost: string;
+  pgPort: number;
+  pgDatabase: string;
+  pgUser: string;
+  pgPasswordConfigured: boolean;
+  pgSslMode: string;
+  projectUrl: string;
+  serviceRoleKeyConfigured: boolean;
+  includeAuthUsers: boolean;
+  includeStorageObjects: boolean;
+  extraSchemas: string[];
+  lastSyncedAt: string | null;
+  lastSyncStatus: string | null;
+  lastSyncSummary: string | null;
+}
+
+/** PUT body: an omitted/empty secret keeps the stored one (required on create). */
+export interface SyncSourcePayload {
+  kind: "supabase" | "postgres";
+  label?: string;
+  pgHost: string;
+  pgPort: number;
+  pgDatabase: string;
+  pgUser: string;
+  pgPassword?: string;
+  pgSslMode: string;
+  projectUrl?: string;
+  serviceRoleKey?: string;
+  includeAuthUsers: boolean;
+  includeStorageObjects: boolean;
+  extraSchemas: string[];
+}
+
+/** POST /api/db-instances/:id/sync-source/test — read-only probe. */
+export interface SyncSourceTestDto {
+  ok: boolean;
+  detail: string;
 }
 
 /** Error carrying the HTTP status so callers can branch on 400 / 403 / 409. */
@@ -417,6 +470,57 @@ export function instanceLogUrl(id: string): string {
 /** SSE endpoint for a restore job. */
 export function restoreLogUrl(id: string): string {
   return `/api/db-instances/${id}/restore-log`;
+}
+
+/** SSE endpoint for a live-source sync job. */
+export function syncLogUrl(id: string): string {
+  return `/api/db-instances/${id}/sync-log`;
+}
+
+export const SYNC_SOURCE_QUERY_KEY = ["db-instance-sync-source"] as const;
+
+/** `null` when no source has been configured for this instance yet. */
+export async function fetchSyncSource(id: string): Promise<SyncSourceDto | null> {
+  return apiFetch<SyncSourceDto | null>(`/api/db-instances/${id}/sync-source`, {
+    cache: "no-store",
+  });
+}
+
+export async function saveSyncSource(
+  id: string,
+  payload: SyncSourcePayload,
+): Promise<SyncSourceDto> {
+  return apiFetch<SyncSourceDto>(
+    `/api/db-instances/${id}/sync-source`,
+    jsonInit("PUT", payload),
+  );
+}
+
+export async function deleteSyncSource(id: string): Promise<void> {
+  const res = await fetch(`/api/db-instances/${id}/sync-source`, { method: "DELETE" });
+  if (!res.ok) throw new ApiError(res.status, await readErrorMessage(res));
+}
+
+/**
+ * Probes the SAVED source from the instance's own container — so save first,
+ * then test. Resolves with `ok:false` for a reachable-but-refusing source;
+ * only transport/permission problems reject.
+ */
+export async function testSyncSource(id: string): Promise<SyncSourceTestDto> {
+  return apiFetch<SyncSourceTestDto>(`/api/db-instances/${id}/sync-source/test`, {
+    method: "POST",
+  });
+}
+
+/** `confirmName` must equal the instance name, else 400 → 202 {jobId}. */
+export async function syncInstance(
+  id: string,
+  confirmName: string,
+): Promise<JobAcceptedDto> {
+  return apiFetch<JobAcceptedDto>(
+    `/api/db-instances/${id}/sync`,
+    jsonInit("POST", { confirmName }),
+  );
 }
 
 /** Slug rules from contract §7. */

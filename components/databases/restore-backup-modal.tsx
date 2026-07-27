@@ -1,24 +1,50 @@
 "use client";
 
 /**
- * Restore backup modal — upload a Postgres backup (downloaded from
- * an existing Supabase project) and load it into this instance, replacing
- * its current data.
+ * Restore / Sync modal (+ ) — replace this instance's data,
+ * from either of two sources:
  *
- * Same "form → mutation → swap to progress" handoff as NewInstanceModal, but
- * scoped to one already-known instance rather than picking a server — the
- * target is fixed, so the only inputs are the file and the type-the-name
- * confirmation (destructive, same convention as Remove).
+ *  - **Upload backup file** — a .zip/.backup/.dump/.sql the operator
+ *    downloaded by hand. The bytes are POSTed to the panel and pushed on from
+ *    there.
+ *  - **Live database** — a hosted Supabase project or any reachable
+ *    Postgres, addressed by connection details + (for storage objects) its
+ *    service_role key. Nothing is uploaded: the managed server dumps the
+ *    source itself. The details are saved encrypted so the same pull can be
+ *    repeated later in one click, which is what makes it a *sync*.
+ *
+ * Both modes share the destructive-action conventions this codebase uses for
+ * Remove: type-the-name confirmation, an up-front warning that a safety
+ * snapshot is the only way back, and the same "form → mutation → swap to
+ * progress" handoff as NewInstanceModal.
  */
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { FileWarning } from "lucide-react";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Dialog, ModalBody, ModalFoot, ModalHead } from "@/components/ui/dialog";
 import { useToast } from "@/components/ui/toast";
-import { ApiError, INSTANCES_QUERY_KEY, restoreInstance, type InstanceDto } from "./api";
+import { cn } from "@/lib/cn";
+import {
+  ApiError,
+  INSTANCES_QUERY_KEY,
+  SYNC_SOURCE_QUERY_KEY,
+  fetchSyncSource,
+  restoreInstance,
+  saveSyncSource,
+  syncInstance,
+  type InstanceDto,
+} from "./api";
 import { ProvisionProgress } from "./provision-progress";
+import {
+  EMPTY_SYNC_SOURCE,
+  SyncSourceForm,
+  payloadFromState,
+  stateFromDto,
+  validateSyncSource,
+  type SyncSourceFormState,
+} from "./sync-source-form";
 
 const INPUT_CLASSES =
   "h-10 w-full rounded-[6px] border border-neutral-200 bg-white px-3 text-sm text-ink " +
@@ -28,9 +54,24 @@ const INPUT_CLASSES =
 /** Client-side pre-check only — the server re-validates authoritatively. */
 const ALLOWED_EXTENSIONS = [".zip", ".backup", ".dump", ".sql"];
 
+type Mode = "file" | "live";
+
 function hasAllowedExtension(filename: string): boolean {
   const lower = filename.toLowerCase();
   return ALLOWED_EXTENSIONS.some((ext) => lower.endsWith(ext));
+}
+
+/** `12 Jun 2026, 14:05` */
+function formatSyncedAt(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString("en-GB", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 export interface RestoreBackupModalProps {
@@ -43,28 +84,71 @@ export function RestoreBackupModal({ open, onClose, instance }: RestoreBackupMod
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
+  const [mode, setMode] = useState<Mode>("file");
   const [file, setFile] = useState<File | null>(null);
+  const [source, setSource] = useState<SyncSourceFormState>(EMPTY_SYNC_SOURCE);
   const [confirmText, setConfirmText] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
-  const [started, setStarted] = useState(false);
+  const [started, setStarted] = useState<Mode | null>(null);
   const [finished, setFinished] = useState<"ok" | "error" | null>(null);
   const submitting = useRef(false);
 
+  // Only fetched while the modal is open — the payload is per-instance and
+  // must never be a stale read of another instance's source.
+  const storedQuery = useQuery({
+    queryKey: [...SYNC_SOURCE_QUERY_KEY, instance?.id],
+    queryFn: () => fetchSyncSource(instance!.id),
+    enabled: open && !!instance,
+    staleTime: 0,
+  });
+  const stored = storedQuery.data ?? null;
+
   useEffect(() => {
     if (!open) return;
+    setMode("file");
     setFile(null);
     setConfirmText("");
     setFormError(null);
-    setStarted(false);
+    setStarted(null);
     setFinished(null);
     submitting.current = false;
   }, [open]);
+
+  // Prefill from the saved source as soon as it lands (and only then — an
+  // operator mid-edit must not have their input replaced by a refetch).
+  useEffect(() => {
+    if (!open) return;
+    setSource(stored ? stateFromDto(stored) : EMPTY_SYNC_SOURCE);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, storedQuery.dataUpdatedAt]);
 
   const restore = useMutation({
     mutationFn: () => restoreInstance(instance!.id, confirmText, file!),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: INSTANCES_QUERY_KEY });
-      setStarted(true);
+      setStarted("file");
+    },
+    onError: (err: Error) => {
+      submitting.current = false;
+      setFormError(
+        err instanceof ApiError && err.status === 409
+          ? `${err.message} — try again once that job finishes.`
+          : err.message,
+      );
+    },
+  });
+
+  // Save-then-start: the engine reads the SAVED row, so persisting the form
+  // first is what makes "sync again later" a single click.
+  const sync = useMutation({
+    mutationFn: async () => {
+      await saveSyncSource(instance!.id, payloadFromState(source));
+      await queryClient.invalidateQueries({ queryKey: SYNC_SOURCE_QUERY_KEY });
+      return syncInstance(instance!.id, confirmText);
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: INSTANCES_QUERY_KEY });
+      setStarted("live");
     },
     onError: (err: Error) => {
       submitting.current = false;
@@ -81,59 +165,66 @@ export function RestoreBackupModal({ open, onClose, instance }: RestoreBackupMod
       ? "Must be a .zip, .backup, .dump, or .sql file."
       : null;
 
+  const sourceError =
+    mode === "live"
+      ? validateSyncSource(
+          source,
+          !!stored?.pgPasswordConfigured,
+          !!stored?.serviceRoleKeyConfigured,
+        )
+      : null;
+
+  const pending = restore.isPending || sync.isPending;
   const valid =
     !!instance &&
-    !!file &&
-    !fileError &&
-    confirmText === instance.name;
+    confirmText === instance.name &&
+    (mode === "file" ? !!file && !fileError : sourceError === null);
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    if (!valid || submitting.current || restore.isPending) return;
+    if (!valid || submitting.current || pending) return;
     submitting.current = true;
     setFormError(null);
-    restore.mutate();
+    if (mode === "file") restore.mutate();
+    else sync.mutate();
   }
 
   if (!instance) return null;
 
+  const titleVerb = started === "live" ? "Syncing" : started ? "Restoring" : "Restore / Sync";
+
   return (
     <Dialog open={open} onClose={onClose} wide>
-      <ModalHead
-        title={started ? `Restoring — ${instance.name}` : `Restore backup — ${instance.name}`}
-        onClose={onClose}
-      />
+      <ModalHead title={`${titleVerb} — ${instance.name}`} onClose={onClose} />
 
       {started ? (
         <>
           <ModalBody>
             <ProvisionProgress
               instanceId={instance.id}
-              kind="restore"
+              kind={started === "live" ? "sync" : "restore"}
               title={`${instance.composeProjectName} · ${instance.server?.name ?? "server"}`}
               onTerminal={(status) => {
                 setFinished(status);
                 void queryClient.invalidateQueries({ queryKey: INSTANCES_QUERY_KEY });
+                void queryClient.invalidateQueries({ queryKey: SYNC_SOURCE_QUERY_KEY });
                 toast({
-                  title: status === "ok" ? "Restored" : undefined,
+                  title: status === "ok" ? (started === "live" ? "Synced" : "Restored") : undefined,
                   message:
                     status === "ok"
-                      ? `${instance.name} restored — a snapshot of its previous data was kept on the server.`
-                      : `${instance.name} restore failed — the log is kept on its card.`,
+                      ? `${instance.name} ${started === "live" ? "synced" : "restored"} — a snapshot of its previous data was kept on the server.`
+                      : `${instance.name} ${started === "live" ? "sync" : "restore"} failed — the log is kept on its card.`,
                   variant: status === "ok" ? "success" : "danger",
                 });
               }}
             />
             <p className="mt-2.5 text-xs text-neutral-500">
-              You can close this — the restore continues on the server and the
-              fleet card stays live.
+              You can close this — the job continues on the server and the fleet
+              card stays live.
             </p>
           </ModalBody>
           <ModalFoot>
-            <Button
-              variant={finished === "ok" ? "primary" : "secondary"}
-              onClick={onClose}
-            >
+            <Button variant={finished === "ok" ? "primary" : "secondary"} onClick={onClose}>
               {finished === "ok" ? "Done — back to fleet" : "Close"}
             </Button>
           </ModalFoot>
@@ -148,45 +239,93 @@ export function RestoreBackupModal({ open, onClose, instance }: RestoreBackupMod
               icon={<FileWarning size={17} strokeWidth={1.75} />}
               title="This replaces ALL data in this instance."
             >
-              The uploaded backup overwrites everything currently in{" "}
-              <span className="font-mono text-[12.5px] text-ink">{instance.name}</span>.
-              A safety snapshot of the current data is taken automatically right
-              before the restore and kept on the server — but there is no
-              one-click undo, so make sure this is the right instance.
+              Everything currently in{" "}
+              <span className="font-mono text-[12.5px] text-ink">{instance.name}</span>{" "}
+              is overwritten. A safety snapshot of the current data is taken
+              automatically right before, and kept on the server — but there is
+              no one-click undo, so make sure this is the right instance.
             </Alert>
 
             <div>
-              <label
-                htmlFor="rb-file"
-                className="label-track mb-1.5 block text-neutral-500"
-              >
-                Backup file
-              </label>
-              <input
-                id="rb-file"
-                type="file"
-                accept=".zip,.backup,.dump,.sql"
-                onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-                className="block w-full text-[13px] text-neutral-700 file:mr-3 file:rounded-[6px] file:border-0 file:bg-cobalt-50 file:px-3 file:py-2 file:text-[13px] file:font-medium file:text-cobalt-700 hover:file:bg-cobalt-100"
-              />
-              <p className="mt-1.5 text-xs text-neutral-500">
-                A .backup/.dump file downloaded from an existing Supabase
-                project, or a .zip containing one.
-              </p>
-              {fileError ? (
-                <p className="mt-1 text-[13px] text-danger">{fileError}</p>
-              ) : null}
+              <span className="label-track mb-1.5 block text-neutral-500">Source</span>
+              <div className="flex items-center gap-1 rounded-[8px] bg-neutral-100 p-0.5">
+                {(
+                  [
+                    { key: "file" as const, label: "Upload backup file" },
+                    { key: "live" as const, label: "Live database" },
+                  ]
+                ).map((opt) => (
+                  <button
+                    key={opt.key}
+                    type="button"
+                    disabled={pending}
+                    onClick={() => {
+                      setMode(opt.key);
+                      setFormError(null);
+                    }}
+                    className={cn(
+                      "flex-1 rounded-[6px] px-2.5 py-1.5 text-[12.5px] font-medium transition-colors",
+                      "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cobalt-400",
+                      mode === opt.key
+                        ? "bg-white text-ink shadow-sm"
+                        : "text-neutral-500 hover:text-ink",
+                    )}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
             </div>
 
+            {mode === "file" ? (
+              <div>
+                <label htmlFor="rb-file" className="label-track mb-1.5 block text-neutral-500">
+                  Backup file
+                </label>
+                <input
+                  id="rb-file"
+                  type="file"
+                  accept=".zip,.backup,.dump,.sql"
+                  onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+                  className="block w-full text-[13px] text-neutral-700 file:mr-3 file:rounded-[6px] file:border-0 file:bg-cobalt-50 file:px-3 file:py-2 file:text-[13px] file:font-medium file:text-cobalt-700 hover:file:bg-cobalt-100"
+                />
+                <p className="mt-1.5 text-xs text-neutral-500">
+                  A .backup/.dump file downloaded from an existing Supabase
+                  project, or a .zip containing one.
+                </p>
+                {fileError ? <p className="mt-1 text-[13px] text-danger">{fileError}</p> : null}
+              </div>
+            ) : (
+              <>
+                {stored?.lastSyncedAt ? (
+                  <Alert variant={stored.lastSyncStatus === "error" ? "danger" : "info"}>
+                    Last synced {formatSyncedAt(stored.lastSyncedAt)}
+                    {stored.lastSyncSummary ? ` — ${stored.lastSyncSummary}` : ""}
+                  </Alert>
+                ) : null}
+                <p className="text-xs text-neutral-500">
+                  The managed server connects to the source directly and dumps
+                  it there — nothing is uploaded through the panel. These
+                  details are saved (encrypted) so you can re-sync later without
+                  re-entering them.
+                </p>
+                <SyncSourceForm
+                  instanceId={instance.id}
+                  state={source}
+                  onChange={setSource}
+                  stored={stored}
+                  disabled={pending}
+                />
+                {sourceError ? (
+                  <p className="text-[13px] text-danger">{sourceError}</p>
+                ) : null}
+              </>
+            )}
+
             <div>
-              <label
-                htmlFor="rb-confirm"
-                className="label-track mb-1.5 block text-neutral-500"
-              >
+              <label htmlFor="rb-confirm" className="label-track mb-1.5 block text-neutral-500">
                 Type{" "}
-                <span className="normal-case tracking-normal text-danger">
-                  {instance.name}
-                </span>{" "}
+                <span className="normal-case tracking-normal text-danger">{instance.name}</span>{" "}
                 to confirm
               </label>
               <input
@@ -201,15 +340,17 @@ export function RestoreBackupModal({ open, onClose, instance }: RestoreBackupMod
             </div>
           </ModalBody>
           <ModalFoot>
-            <Button variant="secondary" onClick={onClose} disabled={restore.isPending}>
+            <Button variant="secondary" onClick={onClose} disabled={pending}>
               Cancel
             </Button>
-            <Button
-              type="submit"
-              variant="danger"
-              disabled={!valid || restore.isPending}
-            >
-              {restore.isPending ? "Uploading…" : "Restore backup"}
+            <Button type="submit" variant="danger" disabled={!valid || pending}>
+              {mode === "file"
+                ? restore.isPending
+                  ? "Uploading…"
+                  : "Restore backup"
+                : sync.isPending
+                  ? "Starting…"
+                  : "Sync from source"}
             </Button>
           </ModalFoot>
         </form>
