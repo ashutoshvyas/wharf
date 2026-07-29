@@ -39,7 +39,9 @@ import {
   type ProvisionCtx,
 } from "./pipeline";
 import {
+  countTables,
   loadDumpIntoTarget,
+  looksLikeCustomFormatDump,
   pgPasswordEnv,
   reassertInstanceRoles,
   resolveAdminUser,
@@ -265,18 +267,53 @@ async function runRestore(
           );
         }
 
+        // Which tool to use is decided from the file's actual CONTENT, not
+        // its extension — pg_dump's default format is plain-text SQL unless
+        // -Fc/-Fd/-Ft was explicitly requested, so a ".backup"/".dump"-named
+        // upload is very commonly plain SQL in practice. Trusting the
+        // extension here previously sent every such file to pg_restore,
+        // which refuses to even open it ("input file appears to be a text
+        // format dump. Please use psql.") — a real error, but this phase
+        // used to only ever log it as the commonly-benign warning below.
+        const isSql = !looksLikeCustomFormatDump(dump.buffer);
+        if (isSql && dump.extension !== ".sql") {
+          emit(
+            "info",
+            `"${row.sourceFilename}" has a ${dump.extension} extension but is actually a ` +
+              "plain-text SQL dump — loading it with psql instead of pg_restore.",
+          );
+        }
+
         // A non-zero exit is surfaced as a warning, not a failure — see the
-        // doc on loadDumpIntoTarget for why that is the right call here.
-        await loadDumpIntoTarget(
+        // doc on loadDumpIntoTarget for why that is the right call here. The
+        // countTables check right after is what catches the case where that
+        // tolerance would otherwise hide a restore that created NOTHING.
+        const restoreCode = await loadDumpIntoTarget(
           conn,
           target,
           {
             containerPath: uploadContainerPath,
-            isSql: dump.extension === ".sql",
+            isSql,
             snapshotPath,
           },
           emit,
         );
+
+        const restoredSchemas = ["public"];
+        const tables = await countTables(conn, target, restoredSchemas, emit);
+        if (tables >= 0) {
+          emit("info", `${tables} table(s) now in ${restoredSchemas.join(", ")}`);
+        }
+        if (restoreCode !== 0 && tables === 0) {
+          throw new Error(
+            `${isSql ? "psql" : "pg_restore"} reported errors and no tables exist in ` +
+              `${restoredSchemas.join(", ")} — nothing was restored. Review the output above; ` +
+              `the most common cause is the connecting role ('${target.user}') lacking rights ` +
+              `on those schemas, or an upload that failed to parse at all. This instance's ` +
+              `previous data is in ${snapshotPath}.`,
+          );
+        }
+
         // An uploaded dump comes from another cluster too, so it carries the
         // same risk as a live sync: put this instance's own role passwords
         // back, or its containers cannot authenticate against their own

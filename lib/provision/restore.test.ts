@@ -35,6 +35,8 @@ import { serverLockHolder, tryAcquireServerLock } from "@/lib/jobs/lock";
 const CTX = { userId: "u1", userEmail: "admin@wharf.example.com" };
 const ok = (stdout = "") => ({ code: 0, stdout, stderr: "" });
 const fail = (stderr = "boom") => ({ code: 1, stdout: "", stderr });
+/** A real custom-format (`pg_dump -Fc`) archive always starts with this magic. */
+const customFormatDump = (rest = "dump bytes") => Buffer.concat([Buffer.from("PGDMP"), Buffer.from(rest)]);
 
 const ROW = {
   id: "inst-1",
@@ -196,8 +198,9 @@ describe("startRestore — happy path", () => {
       return Promise.resolve(ok());
     });
 
+    const uploadBuffer = customFormatDump();
     const res = await startRestore("inst-1", CTX, "clienta-prod", {
-      buffer: Buffer.from("dump bytes"),
+      buffer: uploadBuffer,
       filename: "mydump.backup",
     });
     expect(res).toHaveProperty("jobId");
@@ -214,7 +217,7 @@ describe("startRestore — happy path", () => {
     expect(sftpWriteMock).toHaveBeenCalledTimes(1);
     const [, uploadPath, uploadedBuffer] = sftpWriteMock.mock.calls[0]!;
     expect(uploadPath).toMatch(/^\/opt\/db-instances\/sb_4f2a\/restore\/upload-\d+\.backup$/);
-    expect((uploadedBuffer as Buffer).toString()).toBe("dump bytes");
+    expect((uploadedBuffer as Buffer).equals(uploadBuffer)).toBe(true);
 
     // Command order: mkdir -> pg_dump snapshot -> cp snapshot out -> cp restore in -> pg_restore -> cleanup.
     const idx = (needle: string) => calls.findIndex((c) => c.includes(needle));
@@ -278,21 +281,78 @@ describe("startRestore — happy path", () => {
     expect(calls.some((c) => c.includes("pg_restore"))).toBe(false);
   });
 
-  it("treats a non-zero pg_restore exit as a warning, not a failure", async () => {
+  it("treats a non-zero pg_restore exit as a warning, not a failure, when tables DID land", async () => {
     execMock.mockImplementation((_c: unknown, cmd: string) => {
       if (cmd.includes("pg_restore")) {
         return Promise.resolve({ code: 1, stdout: "", stderr: "WARNING: errors ignored on restore" });
       }
+      if (cmd.includes("pg_tables") && cmd.includes("count(*)")) return Promise.resolve(ok("12"));
       return Promise.resolve(ok());
     });
     const res = await startRestore("inst-1", CTX, "clienta-prod", {
-      buffer: Buffer.from("dump bytes"),
+      buffer: customFormatDump(),
       filename: "mydump.backup",
     });
     expect(res).toHaveProperty("jobId");
     const { status, lines } = await watchJob(restoreJobId("inst-1"));
     expect(status).toBe("ok");
     expect(lines.some((l) => l.includes("commonly just cross-environment"))).toBe(true);
+    expect(lines.some((l) => l.includes("12 table(s) now in public"))).toBe(true);
+  });
+
+  it("detects a plain-text SQL dump uploaded with a misleading .backup extension", async () => {
+    // The exact bug reported in the field: pg_dump's default format is plain
+    // SQL unless -Fc/-Fd/-Ft was explicitly requested, so a ".backup"-named
+    // upload is very commonly plain SQL in practice — trusting the extension
+    // alone previously sent every such file to pg_restore, which refuses to
+    // even open it ("input file appears to be a text format dump").
+    const calls: string[] = [];
+    execMock.mockImplementation((_c: unknown, cmd: string) => {
+      calls.push(cmd);
+      return Promise.resolve(ok());
+    });
+    await startRestore("inst-1", CTX, "clienta-prod", {
+      buffer: Buffer.from("-- PostgreSQL database dump\nselect 1;\n"),
+      filename: "mydump.backup",
+    });
+    const { lines } = await watchJob(restoreJobId("inst-1"));
+    expect(calls.some((c) => c.includes("psql -U postgres -d postgres -f"))).toBe(true);
+    expect(calls.some((c) => c.includes("pg_restore"))).toBe(false);
+    expect(
+      lines.some(
+        (l) => l.includes("has a .backup extension but is actually a") && l.includes("psql"),
+      ),
+    ).toBe(true);
+  });
+
+  // The exact failure seen in the field: pg_restore/psql errored on every
+  // statement for lack of privileges (or a totally unparsable upload), was
+  // tolerated as cross-environment noise, and left an empty `public` behind
+  // while the job reported success — restore.ts previously had no version of
+  // the check sync.ts already does for its own live-source restores.
+  it("fails when the load errored and no tables landed, instead of reporting success", async () => {
+    execMock.mockImplementation((_c: unknown, cmd: string) => {
+      if (cmd.includes("pg_tables") && cmd.includes("count(*)")) return Promise.resolve(ok("0"));
+      if (cmd.includes("pg_restore")) {
+        return Promise.resolve(fail("ERROR: permission denied for schema public"));
+      }
+      return Promise.resolve(ok());
+    });
+
+    await startRestore("inst-1", CTX, "clienta-prod", {
+      buffer: customFormatDump(),
+      filename: "mydump.backup",
+    });
+    const { status, lines } = await watchJob(restoreJobId("inst-1"));
+
+    expect(status).toBe("error");
+    expect(lines.join("\n")).toContain("nothing was restored");
+    // The row must not be left "running" after a restore that changed nothing.
+    expect(
+      instanceUpdate.mock.calls.some(
+        (c) => (c[0] as { data?: { status?: string } }).data?.status === "running",
+      ),
+    ).toBe(false);
   });
 
   it("fails the job when pg_dump (the safety snapshot) fails, before ever touching the restore", async () => {

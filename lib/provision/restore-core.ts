@@ -321,6 +321,22 @@ export async function countTables(
   return Number.isFinite(n) ? n : -1;
 }
 
+/**
+ * Custom-format (`pg_dump -Fc`) archives always begin with this 5-byte ASCII
+ * magic (`K_MAGIC` in Postgres' own `pg_backup_archiver.c`) — the one
+ * reliable way to tell a binary dump from a plain-text SQL one. The file
+ * extension a caller uploaded it under is not: `pg_dump`'s DEFAULT format is
+ * plain-text SQL unless `-Fc`/`-Fd`/`-Ft` was explicitly passed, so a
+ * `.backup`/`.dump`-named file is very commonly plain SQL in practice (a
+ * mislabeling this codebase must not trust — see restore.ts's use of this).
+ */
+const CUSTOM_FORMAT_MAGIC = Buffer.from("PGDMP", "ascii");
+
+/** True when `buffer` is a `pg_restore`-compatible custom-format archive. */
+export function looksLikeCustomFormatDump(buffer: Buffer): boolean {
+  return buffer.subarray(0, CUSTOM_FORMAT_MAGIC.length).equals(CUSTOM_FORMAT_MAGIC);
+}
+
 export interface LoadDumpOptions {
   /** Path of the dump INSIDE the db container. */
   containerPath: string;
