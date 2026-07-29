@@ -32,7 +32,7 @@ import {
 import { InstanceCard } from "./instance-card";
 import { LogTailModal } from "./log-tail-modal";
 import { NewInstanceModal } from "./new-instance-modal";
-import { ProvisionProgress } from "./provision-progress";
+import { jobKindFor, ProvisionProgress, type JobKind } from "./provision-progress";
 import { RestoreBackupModal } from "./restore-backup-modal";
 import { SecretsModal } from "./secrets-modal";
 
@@ -61,7 +61,16 @@ export function DatabasesView({
   const [removeFor, setRemoveFor] = useState<InstanceDto | null>(null);
   const [forceRemove, setForceRemove] = useState(false);
   const [restoreFor, setRestoreFor] = useState<InstanceDto | null>(null);
-  const [progressFor, setProgressFor] = useState<InstanceDto | null>(null);
+  /**
+   * The dialog's job kind is tracked explicitly here rather than derived from
+   * `instance.status` — a mutation's `onSuccess` only ever sees the row as it
+   * was *before* that call (retry/remove's own `variables`), never "removing"
+   * or "provisioning" yet, so inferring the kind from that stale snapshot
+   * always guessed "provision" (see jobKindFor's doc comment).
+   */
+  const [progress, setProgress] = useState<{ instance: InstanceDto; kind: JobKind } | null>(
+    null,
+  );
   /** Instance the new-instance modal is currently streaming. */
   const [modalProvisioningId, setModalProvisioningId] = useState<string | null>(null);
 
@@ -82,7 +91,7 @@ export function DatabasesView({
     mutationFn: (instance: InstanceDto) => retryInstance(instance.id),
     onSuccess: (_data, instance) => {
       void queryClient.invalidateQueries({ queryKey: INSTANCES_QUERY_KEY });
-      setProgressFor(instance);
+      setProgress({ instance, kind: "provision" });
     },
     onError: (err: Error) => {
       toast({
@@ -99,7 +108,7 @@ export function DatabasesView({
     onSuccess: (_data, vars) => {
       void queryClient.invalidateQueries({ queryKey: INSTANCES_QUERY_KEY });
       setRemoveFor(null);
-      setProgressFor(vars.instance);
+      setProgress({ instance: vars.instance, kind: "remove" });
     },
     onError: (err: Error) => {
       toast({ title: "Removal failed to start", message: err.message, variant: "danger" });
@@ -110,7 +119,7 @@ export function DatabasesView({
   /** The card must not double-toast a stream a dialog is already narrating. */
   function isSilent(instance: InstanceDto): boolean {
     return (
-      progressFor?.id === instance.id ||
+      progress?.instance.id === instance.id ||
       modalProvisioningId === instance.id ||
       restoreFor?.id === instance.id
     );
@@ -186,7 +195,7 @@ export function DatabasesView({
               onRestore={() => {
                 if (canRestore) setRestoreFor(instance);
               }}
-              onExpandProgress={() => setProgressFor(instance)}
+              onExpandProgress={() => setProgress({ instance, kind: jobKindFor(instance) })}
             />
           ))}
         </div>
@@ -215,31 +224,48 @@ export function DatabasesView({
       />
 
       <ProgressDialog
-        instance={progressFor}
-        onClose={() => setProgressFor(null)}
-        onTerminal={(instance, status) => {
+        progress={progress}
+        onClose={() => setProgress(null)}
+        onTerminal={(instance, kind, status) => {
           void queryClient.invalidateQueries({ queryKey: INSTANCES_QUERY_KEY });
-          const removing = instance.status === "removing";
           // A successful provision may have just prepared the server for the
           // first time (architecture §4.1 — bootstrapped flips true on first
           // instance). Without this, the server's own cached query (its
           // detail page, the "Re-run setup" button's visibility) stays stale
-          // until something unrelated happens to refetch it.
-          if (!removing && status === "ok") {
+          // until something unrelated happens to refetch it. Remove/restore/
+          // sync never touch bootstrap state, so they don't need this.
+          if (kind === "provision" && status === "ok") {
             void queryClient.invalidateQueries({ queryKey: ["server", instance.serverId] });
             void queryClient.invalidateQueries({ queryKey: ["servers"] });
           }
-          toast({
-            title: !removing && status === "ok" ? "Provisioned" : undefined,
-            message: removing
-              ? status === "ok"
-                ? `${instance.name} removed — volumes destroyed.`
-                : `${instance.name} could not be removed — see log.`
-              : status === "ok"
-                ? `${instance.name} is running.`
-                : `${instance.name} failed — the log is kept on its card.`,
-            variant: status === "ok" ? (removing ? "info" : "success") : "danger",
-          });
+          if (kind === "remove") {
+            toast({
+              message:
+                status === "ok"
+                  ? `${instance.name} removed — volumes destroyed.`
+                  : `${instance.name} could not be removed — see log.`,
+              variant: status === "ok" ? "info" : "danger",
+            });
+          } else if (kind === "restore" || kind === "sync") {
+            const verb = kind === "sync" ? "synced" : "restored";
+            toast({
+              title: status === "ok" ? (kind === "sync" ? "Synced" : "Restored") : undefined,
+              message:
+                status === "ok"
+                  ? `${instance.name} ${verb} — a snapshot of its previous data was kept on the server.`
+                  : `${instance.name} ${kind === "sync" ? "sync" : "restore"} failed — see log.`,
+              variant: status === "ok" ? "success" : "danger",
+            });
+          } else {
+            toast({
+              title: status === "ok" ? "Provisioned" : undefined,
+              message:
+                status === "ok"
+                  ? `${instance.name} is running.`
+                  : `${instance.name} failed — the log is kept on its card.`,
+              variant: status === "ok" ? "success" : "danger",
+            });
+          }
         }}
       />
 
@@ -298,33 +324,43 @@ export function DatabasesView({
   );
 }
 
+const PROGRESS_DIALOG_TITLE: Record<JobKind, string> = {
+  provision: "Provisioning",
+  remove: "Removing",
+  restore: "Restoring",
+  sync: "Syncing",
+};
+
 /**
  * Full-size progress view for a stream that started outside the new-instance
- * modal — a retry, a teardown, or a card the operator expanded.
+ * modal — a retry, a teardown, or a card the operator expanded. `kind` is
+ * decided by the caller (never derived here from `instance.status`, which —
+ * for a mutation's just-kicked-off job — is still the value from BEFORE that
+ * call; see the `progress` state's doc comment above).
  */
 function ProgressDialog({
-  instance,
+  progress,
   onClose,
   onTerminal,
 }: {
-  instance: InstanceDto | null;
+  progress: { instance: InstanceDto; kind: JobKind } | null;
   onClose: () => void;
-  onTerminal: (instance: InstanceDto, status: "ok" | "error") => void;
+  onTerminal: (instance: InstanceDto, kind: JobKind, status: "ok" | "error") => void;
 }) {
-  if (!instance) return null;
-  const removing = instance.status === "removing";
+  if (!progress) return null;
+  const { instance, kind } = progress;
   return (
     <Dialog open onClose={onClose} wide>
       <ModalHead
-        title={`${removing ? "Removing" : "Provisioning"} — ${instance.name}`}
+        title={`${PROGRESS_DIALOG_TITLE[kind]} — ${instance.name}`}
         onClose={onClose}
       />
       <ModalBody>
         <ProvisionProgress
           instanceId={instance.id}
-          kind={removing ? "remove" : "provision"}
+          kind={kind}
           title={`${instance.composeProjectName} · ${instance.server?.name ?? "server"}`}
-          onTerminal={(status) => onTerminal(instance, status)}
+          onTerminal={(status) => onTerminal(instance, kind, status)}
         />
         <p className="mt-2.5 text-xs text-neutral-500">
           You can close this — the operation continues on the server and the

@@ -25,10 +25,29 @@ import { Button } from "@/components/ui/button";
 import { LogStream, type LogLine, type LogLineKind } from "@/components/ui/log-stream";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { useJobStream } from "@/components/servers/use-job-stream";
-import { instanceLogUrl, restoreLogUrl, syncLogUrl } from "./api";
+import { instanceLogUrl, restoreLogUrl, syncLogUrl, type InstanceDto } from "./api";
 
 export type JobKind = "provision" | "remove" | "restore" | "sync";
 export type PhaseState = "pending" | "active" | "done" | "failed";
+
+/**
+ * Which job kind a card's (or dialog's) progress view should follow — from
+ * FRESH instance data only (the query's live rows, never a mutation's
+ * pre-action snapshot: `variables` in a mutation's `onSuccess` still carries
+ * the status the row had *before* that call, which is never "removing"/
+ * "provisioning" yet — see databases-view.tsx's retry/remove handlers, which
+ * know their own kind directly and don't call this).
+ */
+export function jobKindFor(instance: InstanceDto): JobKind {
+  return (
+    instance.activeJob ??
+    (instance.status === "removing"
+      ? "remove"
+      : instance.status === "restoring"
+        ? "restore"
+        : "provision")
+  );
+}
 
 interface PhaseDef {
   id: string;

@@ -29,7 +29,7 @@ import {
   stopInstance,
   type InstanceDto,
 } from "./api";
-import { ProvisionProgress } from "./provision-progress";
+import { jobKindFor, ProvisionProgress } from "./provision-progress";
 
 
 export interface InstanceCardProps {
@@ -192,17 +192,7 @@ export function InstanceCard({
       {busy ? (
         <ProvisionProgress
           instanceId={instance.id}
-          kind={
-            // `restoring` covers both restore and sync, so the live job id
-            // reported by the API decides which log to follow;
-            // status is the fallback for an older payload.
-            instance.activeJob ??
-            (instance.status === "removing"
-              ? "remove"
-              : instance.status === "restoring"
-                ? "restore"
-                : "provision")
-          }
+          kind={jobKindFor(instance)}
           title={`${instance.composeProjectName} · ${serverName}`}
           compact
           onExpand={onExpandProgress}
