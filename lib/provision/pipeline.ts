@@ -12,7 +12,7 @@
  *   ✗ {phase}: {message} phase failed    (kind "err")
  *
  * Phases, in order: validate → [prepare] → secrets → render → upload → start →
- * health. `prepare` appears ONLY when the target server was not already
+ * health → pooler. `prepare` appears ONLY when the target server was not already
  * bootstrapped (, lazy preparation) and is emitted by
  * lib/bootstrap/prepare.ts, with bootstrap's own step lines nested as `info`.
  *
@@ -36,6 +36,7 @@ import { exec, sftpWrite, withConnection } from "@/lib/ssh";
 import { waitForHealthy } from "./health";
 import { provisionJobId } from "./job-ids";
 import { composeProjectName, isValidSlug, remotePathFor, subdomainsFor } from "./naming";
+import { registerPoolerTenant } from "./pooler";
 import { renderInstanceCompose } from "./render";
 import { generateInstanceSecrets, type InstanceSecrets } from "./secrets";
 import { loadStaticVolumeFiles } from "./static-volumes";
@@ -337,6 +338,15 @@ async function runPipeline(
 
       await runPhase(phaseOpts, "health", async () => {
         await waitForHealthy(conn, row.composeProjectName, emit);
+      });
+
+      await runPhase(phaseOpts, "pooler", async () => {
+        await registerPoolerTenant(conn, {
+          serverId: row.serverId,
+          project: row.composeProjectName,
+          pgPassword: generated.pgPassword,
+        });
+        emit("info", `registered with the shared pooler as postgres.${row.composeProjectName}`);
       });
 
       return generated;

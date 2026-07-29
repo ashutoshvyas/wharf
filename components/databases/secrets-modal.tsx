@@ -53,6 +53,11 @@ export function SecretsModal({
       <ModalHead title={`Connection & secrets — ${instance.name}`} onClose={onClose} />
       <ModalBody className="flex flex-col gap-3">
         <MonoField
+          key={`${instance.id}-tenant`}
+          label="Tenant ID"
+          value={instance.composeProjectName}
+        />
+        <MonoField
           key={`${instance.id}-api`}
           label="API URL (Kong — public)"
           value={`https://${instance.apiSubdomain}`}
@@ -80,13 +85,34 @@ export function SecretsModal({
           secret
           onReveal={async () => (await load()).pgPassword}
         />
+        <MonoField
+          key={`${instance.id}-pooler-session`}
+          label="Pooler connection — session mode (:5432)"
+          secret
+          onReveal={async () => {
+            const { pgPassword, poolerHost } = await load();
+            return `postgres://postgres.${instance.composeProjectName}:${pgPassword}@${poolerHost}:5432/postgres`;
+          }}
+        />
+        <MonoField
+          key={`${instance.id}-pooler-transaction`}
+          label="Pooler connection — transaction mode (:6543)"
+          secret
+          onReveal={async () => {
+            const { pgPassword, poolerHost } = await load();
+            return `postgres://postgres.${instance.composeProjectName}:${pgPassword}@${poolerHost}:6543/postgres`;
+          }}
+        />
         <Alert
           variant="info"
           icon={<KeyRound size={17} strokeWidth={1.75} />}
           title="Every reveal is audited."
         >
           Secrets are stored AES-256-GCM encrypted and decrypted in-memory per
-          request. Revealed values re-mask after 30 seconds.
+          request. Revealed values re-mask after 30 seconds. The pooler
+          connections are plain TCP (no TLS yet) — use{" "}
+          <code>sslmode=disable</code>, or configure Supavisor&apos;s TLS
+          yourself.
         </Alert>
       </ModalBody>
       <ModalFoot>

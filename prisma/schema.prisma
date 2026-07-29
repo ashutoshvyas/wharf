@@ -49,6 +49,13 @@ model Server {
   bootstrapped       Boolean    @default(false)
   reachable          Boolean    @default(true)
   hostKeyFingerprint String?    @map("host_key_fingerprint")
+  // AES-256-GCM sealed JSON (lib/bootstrap/pooler-secrets.ts): the shared
+  // per-server Supavisor pooler's own secrets (metadata DB password,
+  // SECRET_KEY_BASE, VAULT_ENC_KEY, API_JWT_SECRET, METRICS_JWT_SECRET).
+  // Generated once on first `installPooler` bootstrap step and reused on
+  // every re-run so already-registered tenants never get orphaned by a
+  // rotated VAULT_ENC_KEY. Null until the pooler has been bootstrapped.
+  poolerSecretsEnc   Bytes?     @map("pooler_secrets_enc")
   tags               String[]
   createdAt          DateTime   @default(now()) @map("created_at")
   updatedAt          DateTime   @updatedAt @map("updated_at")

@@ -9,8 +9,8 @@
  */
 import type { JobEventKind } from "@/lib/jobs/stream";
 import { exec, sftpWrite } from "@/lib/ssh";
-import { TRAEFIK_REMOTE_DIR } from "./constants";
-import { renderTraefikTemplates } from "./templates";
+import { POOLER_NETWORK, POOLER_REMOTE_DIR, TRAEFIK_REMOTE_DIR } from "./constants";
+import { renderPoolerTemplates, renderTraefikTemplates } from "./templates";
 
 /** The connection handle lib/ssh hands out (ssh2 Client, never imported here). */
 type SshConnection = Parameters<typeof exec>[0];
@@ -19,9 +19,14 @@ export type EmitFn = (kind: JobEventKind, line: string) => void;
 
 export interface BootstrapStep {
   name: string;
-  /** true → already satisfied, skip apply. May emit informational lines. */
-  check(conn: SshConnection, emit: EmitFn): Promise<boolean>;
-  apply(conn: SshConnection, emit: EmitFn): Promise<void>;
+  /**
+   * true → already satisfied, skip apply. May emit informational lines.
+   * `serverId` is only needed by steps that read/write DB-backed per-server
+   * state (currently just `installPooler`'s `apply`) — every other step
+   * ignores the extra parameter.
+   */
+  check(conn: SshConnection, emit: EmitFn, serverId: string): Promise<boolean>;
+  apply(conn: SshConnection, emit: EmitFn, serverId: string): Promise<void>;
 }
 
 /** Max streamed output lines published per step (then one truncation note). */
@@ -108,6 +113,22 @@ const createTraefikNetwork: BootstrapStep = {
   },
 };
 
+const createPoolerNetwork: BootstrapStep = {
+  name: "createPoolerNetwork",
+  async check(conn) {
+    const res = await exec(conn, `docker network inspect ${POOLER_NETWORK}`);
+    return res.code === 0;
+  },
+  async apply(conn) {
+    const res = await exec(conn, `docker network create ${POOLER_NETWORK}`);
+    if (res.code !== 0) {
+      throw new Error(
+        `docker network create ${POOLER_NETWORK} failed (code ${res.code}): ${res.stderr.trim()}`,
+      );
+    }
+  },
+};
+
 const uploadTraefikConfig: BootstrapStep = {
   name: "uploadTraefikConfig",
   // Deliberately never "done": config is re-rendered + re-uploaded every run
@@ -181,36 +202,90 @@ const startTraefik: BootstrapStep = {
   },
 };
 
-const openFirewall: BootstrapStep = {
-  name: "openFirewall",
-  async check(conn, emit) {
-    const which = await exec(conn, "command -v ufw");
-    if (which.code !== 0) {
-      emit("info", "ufw not present — ensure ports 80/443 are open");
-      return true; // nothing for us to do; report-only (architecture §4.1 step 4)
-    }
-    const status = await exec(conn, "ufw status");
+const POOLER_COMPOSE = `docker compose -p wharf-pooler -f ${POOLER_REMOTE_DIR}/docker-compose.yml`;
+
+/** Lenient "is the pooler running" probe — parse failures = no (mirrors traefikRunning). */
+async function poolerRunning(conn: SshConnection): Promise<boolean> {
+  try {
+    const res = await exec(conn, `${POOLER_COMPOSE} ps --format json`);
     return (
-      status.code === 0 &&
-      status.stdout.includes("80") &&
-      status.stdout.includes("443")
+      res.code === 0 && res.stdout.trim() !== "" && res.stdout.includes('"running"')
     );
+  } catch {
+    return false;
+  }
+}
+
+const installPooler: BootstrapStep = {
+  name: "installPooler",
+  // Unlike uploadTraefikConfig/startTraefik, this genuinely IS "already done —
+  // skip": the pooler's rendered config only depends on that server's own
+  // persisted secrets (lib/bootstrap/pooler-secrets.ts), never on panel-wide
+  // settings that can change between runs, so there is nothing to re-apply
+  // once both containers are up.
+  async check(conn, emit) {
+    const running = await poolerRunning(conn);
+    emit("info", running ? "pooler is running" : "pooler is not running");
+    return running;
   },
-  async apply(conn) {
-    const res = await exec(conn, "ufw allow 80/tcp && ufw allow 443/tcp");
+  async apply(conn, emit, serverId) {
+    const stream = lineStreamer(emit);
+    const rendered = await renderPoolerTemplates(serverId);
+    for (const file of rendered) {
+      await sftpWrite(conn, file.remotePath, file.content, 0o644);
+    }
+    const res = await exec(conn, `${POOLER_COMPOSE} up -d`, {
+      timeoutMs: 120_000,
+      onStdout: stream,
+      onStderr: stream,
+    });
     if (res.code !== 0) {
       throw new Error(
-        `ufw allow 80/443 failed (code ${res.code}): ${res.stderr.trim()}`,
+        `docker compose up -d (pooler) failed (code ${res.code}): ${res.stderr.trim()}`,
+      );
+    }
+    if (!(await poolerRunning(conn))) {
+      throw new Error(
+        "Pooler containers are not running after `docker compose up -d` — " +
+          `check \`${POOLER_COMPOSE} logs\` on the server.`,
       );
     }
   },
 };
 
-/** The five bootstrap steps, in execution order (architecture §4.1 1–4). */
+/** Ports openFirewall opens: Traefik's 80/443, the pooler's 5432/6543. */
+const FIREWALL_PORTS = [80, 443, 5432, 6543] as const;
+
+const openFirewall: BootstrapStep = {
+  name: "openFirewall",
+  async check(conn, emit) {
+    const which = await exec(conn, "command -v ufw");
+    if (which.code !== 0) {
+      emit("info", "ufw not present — ensure ports 80/443/5432/6543 are open");
+      return true; // nothing for us to do; report-only (architecture §4.1 step 4)
+    }
+    const status = await exec(conn, "ufw status");
+    return (
+      status.code === 0 &&
+      FIREWALL_PORTS.every((port) => status.stdout.includes(String(port)))
+    );
+  },
+  async apply(conn) {
+    const cmd = FIREWALL_PORTS.map((port) => `ufw allow ${port}/tcp`).join(" && ");
+    const res = await exec(conn, cmd);
+    if (res.code !== 0) {
+      throw new Error(`ufw allow failed (code ${res.code}): ${res.stderr.trim()}`);
+    }
+  },
+};
+
+/** The seven bootstrap steps, in execution order (architecture §4.1 1–4). */
 export const BOOTSTRAP_STEPS: readonly BootstrapStep[] = [
   installDocker,
   createTraefikNetwork,
+  createPoolerNetwork,
   uploadTraefikConfig,
   startTraefik,
+  installPooler,
   openFirewall,
 ];

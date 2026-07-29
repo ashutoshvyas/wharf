@@ -15,6 +15,7 @@ function fullRow(): Server & { _count: { websites: number; dbInstances: number }
     linkedPanelUrl: "https://panel.example.com",
     panelUserEnc: Buffer.from("sealed-panel-user"),
     panelPassEnc: Buffer.from("sealed-panel-pass"),
+    poolerSecretsEnc: Buffer.from("sealed-pooler-secrets"),
     bootstrapped: true,
     reachable: true,
     hostKeyFingerprint: "SHA256:abcdef",

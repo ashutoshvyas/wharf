@@ -77,6 +77,14 @@ export interface InstanceSecretsDto {
   anonKey: string;
   serviceRoleKey: string;
   pgPassword: string;
+  /**
+   * The managed server's own host/IP — the shared Supavisor pooler publishes
+   * :5432/:6543 directly there (no subdomain, no Traefik routing involved).
+   * Combined client-side with `pgPassword` and the instance's own
+   * `composeProjectName` (InstanceDto) to build the two pooler DSNs shown in
+   * the connection modal — no separate pooler secret is ever stored/revealed.
+   */
+  poolerHost: string;
 }
 
 export interface SlugAvailabilityDto {

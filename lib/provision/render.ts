@@ -9,17 +9,23 @@
  *   - docker-compose.yml, with per-instance Traefik labels and networks
  *   - .env, with the generated secrets and this instance's public URLs
  *
- * Three invariants this module is responsible for, each covered by a test:
+ * Four invariants this module is responsible for, each covered by a test:
  *
  *   1. **kong is public, studio is gated.** The kong router carries no
  *      middleware — live applications call it and must not hit a login wall.
  *      The studio router carries WHARF_AUTH_MIDDLEWARE (spec §6.1).
  *   2. **db never joins the shared traefik network.** Only kong and studio do;
  *      every other service stays on the project-private default network, so
- *      Postgres is unreachable from other tenants on the box.
+ *      Postgres is unreachable from other tenants on the box over THAT
+ *      network — see invariant 4 for the one other network db does join.
  *   3. **No published host ports on routed services.** Traefik reaches
  *      containers over the shared network, so instances can never collide on
  *      host ports 8000/8443 (which the upstream template publishes).
+ *   4. **db, and only db, joins the shared pooler network.** The one shared
+ *      per-server Supavisor (templates/pooler/) reaches every instance's `db`
+ *      there, under a project-scoped alias (`{project}-db`) so it can tell
+ *      tenants apart — see lib/bootstrap/constants.ts's POOLER_NETWORK doc
+ *      comment for what this narrows about invariant 2's isolation guarantee.
  *
  * Rendering is a pure function of its inputs — no timestamps, no fresh
  * randomness — so a retried provision re-renders byte-identical files.
@@ -28,6 +34,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { dump, load } from "js-yaml";
 import {
+  POOLER_NETWORK,
   TRAEFIK_NETWORK,
   WHARF_AUTH_MIDDLEWARE,
   WHARF_STUDIO_FRAME_MIDDLEWARE,
@@ -311,8 +318,13 @@ function validateInput(input: RenderInstanceInput): void {
   }
 }
 
-/** Attach `network` to a service, preserving any existing per-network config. */
-function joinNetwork(service: ComposeService, network: string): void {
+/**
+ * Attach `network` to a service, preserving any existing per-network config.
+ * An optional `alias` (map form only) is how the shared Supavisor pooler
+ * tells one instance's `db` apart from every other's on the same network —
+ * see `${project}-db` below.
+ */
+function joinNetwork(service: ComposeService, network: string, alias?: string): void {
   if (Array.isArray(service.networks)) {
     const existing = new Set(service.networks);
     existing.add(network);
@@ -323,7 +335,7 @@ function joinNetwork(service: ComposeService, network: string): void {
   // `default` must stay explicit once the map form is used, otherwise compose
   // reads the service as being on `traefik` only.
   if (!("default" in current)) current.default = null;
-  current[network] = null;
+  current[network] = alias ? { aliases: [alias] } : null;
   service.networks = current;
 }
 
@@ -338,9 +350,10 @@ async function renderCompose(
 
   const kong = doc?.services?.kong;
   const studio = doc?.services?.studio;
-  if (!kong || !studio) {
+  const db = doc?.services?.db;
+  if (!kong || !studio || !db) {
     throw new Error(
-      `${templatePath} is missing the kong and/or studio service — the vendored template is out of sync with render.ts (see templates/supabase/VERSIONS.md).`,
+      `${templatePath} is missing the kong, studio and/or db service — the vendored template is out of sync with render.ts (see templates/supabase/VERSIONS.md).`,
     );
   }
 
@@ -355,14 +368,24 @@ async function renderCompose(
 
   joinNetwork(kong, TRAEFIK_NETWORK);
   joinNetwork(studio, TRAEFIK_NETWORK);
+  // The shared per-server Supavisor pooler (lib/bootstrap/steps.ts
+  // `installPooler`) reaches this instance's Postgres over POOLER_NETWORK,
+  // under an alias scoped to this project so it can tell tenants apart —
+  // lib/provision/pipeline.ts's `pooler` phase registers `{project}-db` as
+  // this tenant's db_host.
+  joinNetwork(db, POOLER_NETWORK, `${input.project}-db`);
 
-  // Belt and braces for invariant 2: nothing but the two routed services may
-  // be reachable from the shared network.
+  // Belt and braces for invariants 2 and 4: nothing but kong/studio may reach
+  // the Traefik network, and nothing but db may reach the pooler network.
   for (const [name, service] of Object.entries(doc.services)) {
-    if (name === "kong" || name === "studio") continue;
-    if (serviceNetworkNames(service).includes(TRAEFIK_NETWORK)) {
+    if (name !== "kong" && name !== "studio" && serviceNetworkNames(service).includes(TRAEFIK_NETWORK)) {
       throw new Error(
         `Service ${name} must not join the ${TRAEFIK_NETWORK} network — only kong and studio are Traefik-routed.`,
+      );
+    }
+    if (name !== "db" && serviceNetworkNames(service).includes(POOLER_NETWORK)) {
+      throw new Error(
+        `Service ${name} must not join the ${POOLER_NETWORK} network — only db is pooler-routed.`,
       );
     }
   }
@@ -374,6 +397,9 @@ async function renderCompose(
     default: { name: `${input.project}_default` },
     // Created by bootstrap and shared with the Traefik container.
     [TRAEFIK_NETWORK]: { external: true },
+    // Created by bootstrap (installPooler) and shared with the one Supavisor
+    // container per server.
+    [POOLER_NETWORK]: { external: true },
   };
 
   const body = dump(doc, { sortKeys: false, lineWidth: -1 });
@@ -384,6 +410,8 @@ async function renderCompose(
     `# Instance: ${input.slug}   project: ${input.project}   path: ${input.remotePath}`,
     `# API:    https://${apiSubdomain}    -> kong:${KONG_HTTP_CONTAINER_PORT} (public, no auth middleware)`,
     `# Studio: https://${studioSubdomain} -> studio:${STUDIO_CONTAINER_PORT} (behind ${WHARF_AUTH_MIDDLEWARE})`,
+    `# Pooler: registered with the server's shared Supavisor as db_host ${input.project}-db`,
+    `#         (postgres.${input.project}@<server host>:5432 / :6543 — see lib/provision/pipeline.ts)`,
     `# Re-running provisioning overwrites this file. Source template:`,
     `# ${TEMPLATE_DIR}/docker-compose.yml (see VERSIONS.md for the upstream ref).`,
     "",

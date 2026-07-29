@@ -1,0 +1,113 @@
+# WHARF shared per-server Supavisor pooler (direct Postgres wire-protocol access).
+#
+# Unlike templates/supabase/docker-compose.yml (one stack per tenant instance),
+# this is deployed exactly ONCE per managed server by bootstrap (like Traefik),
+# rendered by lib/bootstrap/templates.ts and uploaded to POOLER_REMOTE_DIR.
+# Every tenant instance's `db` service registers itself here as a Supavisor
+# "tenant" (lib/provision/pipeline.ts, `pooler` phase) via Supavisor's own
+# admin HTTP API — this file's `supavisor` service is the ONLY thing that ever
+# calls that API; nothing else in this compose file is per-tenant.
+#
+# This is intentionally NOT vendored/trimmed from supabase/supabase's own
+# `docker/docker-compose.yml` the way templates/supabase/ is — that upstream
+# file wires one Supavisor to one co-located `db` via a static `pooler.exs`
+# tenant declaration, which is the wrong shape for "one shared pooler fronting
+# N independently-provisioned tenant databases." See VERSIONS.md for the
+# upstream commit this was still modeled on for image tags and env var names.
+#
+# Two networks, on purpose:
+#   - `internal` (this project's own private network): supavisor <-> its OWN
+#     metadata Postgres (pooler-db) — tenant/cluster/user config, NOT tenant
+#     data. No tenant instance ever reaches this network.
+#   - POOLER_NETWORK (external, shared, created once by bootstrap): supavisor
+#     <-> every tenant instance's `db` service. Only `db` joins it on the
+#     tenant side (lib/provision/render.ts) — see the constant's doc comment
+#     in lib/bootstrap/constants.ts for what this does and does not weaken.
+services:
+  # A plain, lean Postgres — NOT supabase/postgres. This holds only
+  # Supavisor's own tenant/cluster/user metadata (Ecto-migrated by the
+  # `supavisor` service below), so none of supabase/postgres's init scripts
+  # (roles.sql, jwt.sql, etc. — see templates/supabase/docker-compose.yml)
+  # are relevant or mounted here; the official image's own POSTGRES_USER/
+  # POSTGRES_PASSWORD/POSTGRES_DB bootstrap is sufficient on its own.
+  pooler-db:
+    image: postgres:17.6-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: supavisor_admin
+      POSTGRES_PASSWORD: "{{POOLER_DB_PASSWORD}}"
+      POSTGRES_DB: supavisor
+    volumes:
+      - ./pooler-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U supavisor_admin -d supavisor"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - internal
+
+  supavisor:
+    image: supabase/supavisor:2.9.5
+    restart: unless-stopped
+    depends_on:
+      pooler-db:
+        condition: service_healthy
+    # Only the two proxy ports are reachable from outside the host. The admin
+    # API (4000) is bound to loopback only — lib/provision/pipeline.ts and
+    # lib/provision/teardown.ts reach it with `curl http://localhost:4000/...`
+    # over the same SSH connection already open for the rest of the phase,
+    # never from the panel over the network.
+    ports:
+      - "5432:5432"
+      - "6543:6543"
+      - "127.0.0.1:4000:4000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "curl",
+          "-sSfL",
+          "--head",
+          "-o",
+          "/dev/null",
+          "http://127.0.0.1:4000/api/health",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    environment:
+      PORT: "4000"
+      # Supavisor's OWN metadata store — a dedicated database on pooler-db,
+      # never a tenant's database.
+      DATABASE_URL: "ecto://supavisor_admin:{{POOLER_DB_PASSWORD}}@pooler-db:5432/supavisor"
+      CLUSTER_POSTGRES: "true"
+      SECRET_KEY_BASE: "{{SECRET_KEY_BASE}}"
+      VAULT_ENC_KEY: "{{VAULT_ENC_KEY}}"
+      API_JWT_SECRET: "{{API_JWT_SECRET}}"
+      METRICS_JWT_SECRET: "{{METRICS_JWT_SECRET}}"
+      REGION: local
+      ERL_AFLAGS: "-proto_dist inet_tcp"
+    # The image's default CMD is bare `/app/bin/server` — migrations are NOT
+    # run automatically, so the entrypoint below runs them once on every
+    # start (idempotent: Ecto migrations no-op when already applied).
+    command:
+      [
+        "/bin/sh",
+        "-c",
+        "/app/bin/migrate && /app/bin/server",
+      ]
+    networks:
+      - internal
+      - pooler
+
+networks:
+  internal:
+    name: wharf-pooler_internal
+  # External name is POOLER_NETWORK ("wharf-pooler") from lib/bootstrap/constants.ts —
+  # created once by bootstrap, joined here and by every tenant's `db` service.
+  pooler:
+    name: wharf-pooler
+    external: true

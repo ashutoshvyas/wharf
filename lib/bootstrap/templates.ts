@@ -10,7 +10,8 @@
  */
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { TRAEFIK_REMOTE_DIR } from "./constants";
+import { POOLER_REMOTE_DIR, TRAEFIK_REMOTE_DIR } from "./constants";
+import { ensurePoolerSecrets, type PoolerSecrets } from "./pooler-secrets";
 
 /** Relative paths, identical under templates/traefik/ and the remote dir. */
 export const TRAEFIK_TEMPLATE_FILES = [
@@ -61,6 +62,43 @@ export async function renderTraefikTemplates(): Promise<RenderedTemplate[]> {
         relPath,
         remotePath: `${TRAEFIK_REMOTE_DIR}/${relPath}`,
         content: substitutePlaceholders(raw, { panelUrl, leEmail }),
+      };
+    }),
+  );
+}
+
+/** Relative path, identical under templates/pooler/ and the remote dir. */
+export const POOLER_TEMPLATE_FILES = ["docker-compose.yml"] as const;
+
+/** Replace the pooler's secret placeholders everywhere they occur. */
+export function substitutePoolerPlaceholders(
+  template: string,
+  secrets: PoolerSecrets,
+): string {
+  return template
+    .replaceAll("{{POOLER_DB_PASSWORD}}", secrets.poolerDbPassword)
+    .replaceAll("{{SECRET_KEY_BASE}}", secrets.secretKeyBase)
+    .replaceAll("{{VAULT_ENC_KEY}}", secrets.vaultEncKey)
+    .replaceAll("{{API_JWT_SECRET}}", secrets.apiJwtSecret)
+    .replaceAll("{{METRICS_JWT_SECRET}}", secrets.metricsJwtSecret);
+}
+
+/**
+ * Render the shared pooler's compose file for `serverId`, generating (once)
+ * and reusing (every later call) that server's own pooler secrets — see
+ * lib/bootstrap/pooler-secrets.ts for why they must be persisted rather than
+ * re-derived on every render.
+ */
+export async function renderPoolerTemplates(serverId: string): Promise<RenderedTemplate[]> {
+  const secrets = await ensurePoolerSecrets(serverId);
+  const baseDir = path.join(process.cwd(), "templates", "pooler");
+  return Promise.all(
+    POOLER_TEMPLATE_FILES.map(async (relPath) => {
+      const raw = await readFile(path.join(baseDir, relPath), "utf8");
+      return {
+        relPath,
+        remotePath: `${POOLER_REMOTE_DIR}/${relPath}`,
+        content: substitutePoolerPlaceholders(raw, secrets),
       };
     }),
   );

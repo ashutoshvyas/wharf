@@ -2,10 +2,13 @@
  * Server row → API payload serializer.
  *
  * SECURITY: this is an explicit ALLOWLIST. Encrypted columns
- * (sshPasswordEnc, sshPrivateKeyEnc, panelUserEnc, panelPassEnc) and any
- * decrypted secret must NEVER appear here — decrypted panel credentials are
- * only returned by the audited reveal endpoint
- * (GET /api/servers/:id/panel-credential).
+ * (sshPasswordEnc, sshPrivateKeyEnc, panelUserEnc, panelPassEnc,
+ * poolerSecretsEnc) and any decrypted secret must NEVER appear here —
+ * decrypted panel credentials are only returned by the audited reveal
+ * endpoint (GET /api/servers/:id/panel-credential); the pooler's own secrets
+ * are never returned anywhere (lib/bootstrap/pooler-secrets.ts) — only a
+ * tenant's already-known pgPassword and the server's public host are needed
+ * to build a pooler DSN (see components/databases/secrets-modal.tsx).
  */
 import type { Server } from "@prisma/client";
 

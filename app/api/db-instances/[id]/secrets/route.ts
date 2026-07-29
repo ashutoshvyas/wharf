@@ -7,10 +7,16 @@
  * Ciphertext is opened in memory, never logged, and the response is
  * `Cache-Control: no-store`. Every call writes a `secret.reveal` audit row.
  *
- * 200 {apiUrl, studioUrl, anonKey, serviceRoleKey, pgPassword}
+ * 200 {apiUrl, studioUrl, anonKey, serviceRoleKey, pgPassword, poolerHost}
  * 404  unknown or soft-deleted instance
  * 409  secrets not stored yet (still provisioning, or provisioning failed
  *      before the finalize step)
+ *
+ * `poolerHost` (the server's own host/IP) is the only pooler-related value
+ * returned here — the DSN itself (`postgres.{composeProjectName}@poolerHost`)
+ * is built client-side from this plus `pgPassword` and the instance's own
+ * `composeProjectName` (already on the list DTO); no new secret is stored or
+ * revealed just for the pooler (lib/provision/pooler.ts).
  */
 import { NextResponse } from "next/server";
 import { apiError, requireApiRole, withErrorHandling } from "@/lib/api-helpers";
@@ -34,6 +40,7 @@ export const GET = withErrorHandling(
         pgPasswordEnc: true,
         anonKeyEnc: true,
         serviceRoleKeyEnc: true,
+        server: { select: { host: true } },
       },
     });
     if (!instance) return apiError(404, "Database instance not found");
@@ -55,6 +62,7 @@ export const GET = withErrorHandling(
       anonKey: open(instance.anonKeyEnc),
       serviceRoleKey: open(instance.serviceRoleKeyEnc),
       pgPassword: open(instance.pgPasswordEnc),
+      poolerHost: instance.server.host,
     };
 
     await audit({

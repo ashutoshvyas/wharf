@@ -27,6 +27,7 @@ import {
   runPhase,
   type ProvisionCtx,
 } from "./pipeline";
+import { deregisterPoolerTenant } from "./pooler";
 
 /** The connection handle lib/ssh hands out (ssh2 Client, never imported here). */
 type SshConnection = Parameters<typeof exec>[0];
@@ -167,13 +168,26 @@ async function runTeardown(
         "info",
         "force remove: no SSH connection is attempted — the stop/volumes/files " +
           "phases are skipped entirely. Anything that exists on the remote " +
-          "server for this instance is left untouched; only WHARF's own " +
-          "metadata row is removed.",
+          "server for this instance — including its shared-pooler tenant " +
+          "registration — is left untouched; only WHARF's own metadata row " +
+          "is removed.",
       );
     } else {
       await withConnection(row.serverId, async (conn: SshConnection) => {
         // ── stop: containers AND named volumes in one idempotent command ──
         await runPhase(phaseOpts, "stop", async () => {
+          // Best-effort: deregistering first stops the shared pooler routing
+          // to this tenant before its containers disappear. A failure here
+          // (pooler unreachable, already gone, …) must never block removal —
+          // there is nothing left to protect once the containers and volumes
+          // below are gone anyway.
+          await deregisterPoolerTenant(conn, row.serverId, row.composeProjectName).catch(
+            (err: unknown) => {
+              const message = err instanceof Error ? err.message : String(err);
+              emit("info", `warning: could not deregister from the shared pooler (continuing): ${message}`);
+            },
+          );
+
           volumesRemoved = await listVolumes(conn, row.composeProjectName);
           const res = await exec(
             conn,

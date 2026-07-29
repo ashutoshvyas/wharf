@@ -26,8 +26,20 @@ type SshConnection = Parameters<typeof exec>[0];
 /** Minimum free space on /opt before we will install anything (bytes → KB). */
 export const MIN_FREE_KB = 10 * 1024 * 1024; // 10 GB in 1K blocks
 
-/** Ports a database server must own outright (Traefik binds them). */
-const REQUIRED_PORTS = [80, 443] as const;
+/**
+ * Ports a database server must own outright: 80/443 for Traefik, 5432/6543
+ * for the shared per-server Supavisor pooler (lib/bootstrap/steps.ts
+ * `installPooler`) — checked up front so a host that can never work is
+ * rejected before anything is installed, rather than failing deep inside a
+ * `docker compose up -d` port-bind error.
+ */
+const REQUIRED_PORTS = [80, 443, 5432, 6543] as const;
+
+/** "80, 443, 5432 and 6543" — used in both the info line and the error. */
+function formatPortList(ports: readonly number[]): string {
+  if (ports.length === 1) return String(ports[0]);
+  return `${ports.slice(0, -1).join(", ")} and ${ports.at(-1)}`;
+}
 
 /**
  * Run the five idempotent bootstrap steps over an open connection, publishing
@@ -42,14 +54,15 @@ const REQUIRED_PORTS = [80, 443] as const;
 export async function runBootstrapSteps(
   conn: SshConnection,
   emit: EmitFn,
+  serverId: string,
 ): Promise<void> {
   for (const step of BOOTSTRAP_STEPS) {
     emit("step", `› ${step.name}`);
-    if (await step.check(conn, emit)) {
+    if (await step.check(conn, emit, serverId)) {
       emit("ok", `✓ ${step.name}: already done — skipped`);
       continue;
     }
-    await step.apply(conn, emit);
+    await step.apply(conn, emit, serverId);
     emit("ok", `✓ ${step.name}`);
   }
 }
@@ -146,12 +159,12 @@ export async function preflightServer(
     if (hit.found) {
       throw new Error(
         `port ${port} is in use${hit.process ? ` by ${hit.process}` : ""} — ` +
-          "a database server must own ports 80 and 443 " +
+          `a database server must own ports ${formatPortList(REQUIRED_PORTS)} ` +
           "(see architecture open question §5). Use a dedicated server for databases.",
       );
     }
   }
-  emit("info", "preflight: ports 80 and 443 are free");
+  emit("info", `preflight: ports ${formatPortList(REQUIRED_PORTS)} are free`);
 
   // ── 2. effective root ───────────────────────────────────────────────────
   const uid = await tryExec(conn, "id -u");
@@ -226,7 +239,7 @@ export async function ensureServerPrepared(
     await preflightServer(conn, emit);
     // Nested detail: the UI treats `prepare` as ONE phase, so bootstrap's own
     // `› step` / `✓ step` markers are downgraded to plain info lines.
-    await runBootstrapSteps(conn, (_kind, line) => emit("info", line));
+    await runBootstrapSteps(conn, (_kind, line) => emit("info", line), serverId);
 
     await prisma.server.update({
       where: { id: serverId },

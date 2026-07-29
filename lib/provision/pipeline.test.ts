@@ -49,6 +49,11 @@ vi.mock("./render", () => ({
   renderInstanceCompose: (...a: unknown[]) => renderMock(...a),
 }));
 
+const registerPoolerMock = vi.fn();
+vi.mock("./pooler", () => ({
+  registerPoolerTenant: (...a: unknown[]) => registerPoolerMock(...a),
+}));
+
 const generateSecretsMock = vi.fn(() =>
   Promise.resolve({
     pgPassword: "PgPass123",
@@ -124,6 +129,7 @@ beforeEach(() => {
   ensurePreparedMock.mockResolvedValue(false); // already prepared
   waitForHealthyMock.mockResolvedValue(undefined);
   renderMock.mockResolvedValue({ composeYaml: "services: {}\n", envFile: "K=V\n" });
+  registerPoolerMock.mockResolvedValue(undefined);
 });
 
 describe("startProvision — validation (no row created)", () => {
@@ -176,7 +182,12 @@ describe("startProvision — happy path", () => {
       "upload", "upload",
       "start", "start",
       "health", "health",
+      "pooler", "pooler",
     ]);
+    expect(registerPoolerMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ serverId: "srv-1", pgPassword: "PgPass123" }),
+    );
 
     // Compose + .env uploaded, .env at 0600.
     const envCall = sftpWriteMock.mock.calls.find((c) => String(c[1]).endsWith(".env"));

@@ -59,7 +59,7 @@ export function runBootstrap(
         // Same loop the provisioning pipeline runs (lib/bootstrap/prepare.ts);
         // here the step markers stay top-level `step`/`ok` events because the
         // standalone route has no enclosing phase.
-        await runBootstrapSteps(conn, (kind, line) => publish(jobId, kind, line));
+        await runBootstrapSteps(conn, (kind, line) => publish(jobId, kind, line), serverId);
       });
 
       await prisma.server.update({

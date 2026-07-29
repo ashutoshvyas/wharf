@@ -25,6 +25,11 @@ vi.mock("@/lib/db", () => ({
 const auditMock = vi.fn((..._a: unknown[]) => Promise.resolve());
 vi.mock("@/lib/audit", () => ({ audit: (...a: unknown[]) => auditMock(...a) }));
 
+const deregisterPoolerMock = vi.fn();
+vi.mock("./pooler", () => ({
+  deregisterPoolerTenant: (...a: unknown[]) => deregisterPoolerMock(...a),
+}));
+
 import { assertSafeRemotePath, startRemove } from "./teardown";
 import { removeJobId } from "./job-ids";
 import { subscribe } from "@/lib/jobs/stream";
@@ -72,6 +77,7 @@ beforeEach(() => {
     if (cmd.includes("volume ls")) return Promise.resolve(ok(""));
     return Promise.resolve(ok());
   });
+  deregisterPoolerMock.mockResolvedValue(undefined);
 });
 
 describe("assertSafeRemotePath — the rm -rf guard (safety)", () => {
@@ -223,6 +229,48 @@ describe("startRemove (teardown job)", () => {
         metadata: expect.objectContaining({ forced: false }),
       }),
     );
+  });
+
+  it("deregisters the instance from the shared pooler before stopping containers", async () => {
+    const calls: string[] = [];
+    execMock.mockImplementation((_c: unknown, cmd: string) => {
+      calls.push(cmd);
+      if (cmd.includes("volume ls")) return Promise.resolve(ok(""));
+      return Promise.resolve(ok());
+    });
+
+    const res = await startRemove("inst-1", CTX);
+    await watchJob(removeJobId("inst-1"));
+
+    expect(deregisterPoolerMock).toHaveBeenCalledWith(expect.anything(), "srv-1", "sb_4f2a");
+    // Must happen before `down -v` — the pooler should stop routing to this
+    // tenant before its containers disappear.
+    const downIdx = calls.findIndex((c) => c.includes("down -v"));
+    expect(downIdx).toBeGreaterThan(-1);
+    expect(res).toHaveProperty("jobId");
+  });
+
+  it("does not fail teardown when deregistering from the pooler fails", async () => {
+    deregisterPoolerMock.mockRejectedValue(new Error("pooler unreachable"));
+
+    await startRemove("inst-1", CTX);
+    const { status, lines } = await watchJob(removeJobId("inst-1"));
+
+    expect(status).toBe("ok");
+    expect(
+      lines.some((l) => l.includes("could not deregister from the shared pooler") && l.includes("pooler unreachable")),
+    ).toBe(true);
+    const softDelete = instanceUpdate.mock.calls.find(
+      (c) => (c[0] as { data?: { deletedAt?: unknown } })?.data?.deletedAt != null,
+    );
+    expect(softDelete).toBeTruthy();
+  });
+
+  it("skips pooler deregistration entirely in force mode", async () => {
+    instanceFindUnique.mockResolvedValue({ ...ROW_ERRORED });
+    await startRemove("inst-1", CTX, { force: true });
+    await watchJob(removeJobId("inst-1"));
+    expect(deregisterPoolerMock).not.toHaveBeenCalled();
   });
 });
 

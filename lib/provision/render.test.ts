@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { load } from "js-yaml";
 import {
+  POOLER_NETWORK,
   TRAEFIK_NETWORK,
   WHARF_AUTH_MIDDLEWARE,
   WHARF_STUDIO_FRAME_MIDDLEWARE,
@@ -195,6 +196,31 @@ describe("renderInstanceCompose — networks", () => {
       ]);
     }
   });
+
+  it("declares the pooler network as external", async () => {
+    const { doc } = await renderDoc();
+    expect(doc.networks?.[POOLER_NETWORK]).toEqual({ external: true });
+  });
+
+  it("joins db to the pooler network under a project-scoped alias, without dropping default", async () => {
+    const { doc } = await renderDoc();
+    const nets = serviceNetworkNames(doc.services.db);
+    expect(nets).toContain(POOLER_NETWORK);
+    expect(nets).toContain("default");
+    const networks = doc.services.db?.networks as Record<string, { aliases?: string[] }>;
+    expect(networks[POOLER_NETWORK]?.aliases).toEqual(["sb_4f2a-db"]);
+  });
+
+  it("keeps every service other than db off the pooler network", async () => {
+    const { doc } = await renderDoc();
+    for (const [name, service] of Object.entries(doc.services)) {
+      if (name === "db") continue;
+      expect([name, serviceNetworkNames(service).includes(POOLER_NETWORK)]).toEqual([
+        name,
+        false,
+      ]);
+    }
+  });
 });
 
 describe("renderInstanceCompose — host ports", () => {
@@ -257,7 +283,7 @@ describe("renderInstanceCompose — vendored template integrity", () => {
       await readFile(path.join(process.cwd(), "templates", "supabase", "docker-compose.yml"), "utf8"),
     ) as ComposeDoc;
     for (const name of Object.keys(template.services)) {
-      if (name === "kong" || name === "studio") continue;
+      if (name === "kong" || name === "studio" || name === "db") continue;
       const { doc } = await renderDoc();
       expect([name, doc.services[name]]).toEqual([name, template.services[name]]);
     }
@@ -280,6 +306,18 @@ describe("renderInstanceCompose — vendored template integrity", () => {
       }
       expect([name, after]).toEqual([name, before]);
     }
+  });
+
+  it("changes db only by networks (the pooler alias)", async () => {
+    const template = load(
+      await readFile(path.join(process.cwd(), "templates", "supabase", "docker-compose.yml"), "utf8"),
+    ) as ComposeDoc;
+    const { doc } = await renderDoc();
+    const before = { ...(template.services.db ?? {}) };
+    const after = { ...(doc.services.db ?? {}) };
+    delete before.networks;
+    delete after.networks;
+    expect(after).toEqual(before);
   });
 
   it("does not set a top-level compose project name", async () => {

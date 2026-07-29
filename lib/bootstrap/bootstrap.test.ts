@@ -14,17 +14,38 @@ vi.mock("@/lib/ssh", () => ({
 }));
 
 const serverUpdate = vi.fn();
+const serverFindUnique = vi.fn();
 vi.mock("@/lib/db", () => ({
-  prisma: { server: { update: (...a: unknown[]) => serverUpdate(...a) } },
+  prisma: {
+    server: {
+      update: (...a: unknown[]) => serverUpdate(...a),
+      findUnique: (...a: unknown[]) => serverFindUnique(...a),
+    },
+  },
 }));
 
 const auditMock = vi.fn((..._args: unknown[]) => Promise.resolve());
 vi.mock("@/lib/audit", () => ({ audit: (...a: unknown[]) => auditMock(...a) }));
 
+// The pooler-secrets round trip (lib/bootstrap/pooler-secrets.ts) needs
+// seal/open — stub both rather than requiring a real WHARF_MASTER_KEY here.
+vi.mock("@/lib/crypto", () => ({
+  seal: (plaintext: string) => Buffer.from(`sealed:${plaintext}`),
+  open: (buf: Uint8Array) => Buffer.from(buf).toString().replace(/^sealed:/, ""),
+}));
+
 import { MAX_STEP_LINES, BOOTSTRAP_STEPS } from "./steps";
-import { renderTraefikTemplates, substitutePlaceholders, TRAEFIK_TEMPLATE_FILES } from "./templates";
+import {
+  renderTraefikTemplates,
+  renderPoolerTemplates,
+  substitutePlaceholders,
+  TRAEFIK_TEMPLATE_FILES,
+  POOLER_TEMPLATE_FILES,
+} from "./templates";
 import {
   TRAEFIK_REMOTE_DIR,
+  POOLER_REMOTE_DIR,
+  POOLER_NETWORK,
   WHARF_AUTH_MIDDLEWARE,
   WHARF_STUDIO_FRAME_MIDDLEWARE,
   TRAEFIK_NETWORK,
@@ -62,6 +83,7 @@ beforeEach(() => {
     async (_id: string, fn: (c: unknown) => Promise<unknown>) => fn({ conn: true }),
   );
   serverUpdate.mockResolvedValue({});
+  serverFindUnique.mockResolvedValue({ id: "srv-1", poolerSecretsEnc: null });
 });
 
 describe("templates", () => {
@@ -130,14 +152,40 @@ describe("templates", () => {
     expect(yml).toContain("httpChallenge");
     expect(yml).toContain("exposedByDefault: false");
   });
+
+  it("renderPoolerTemplates substitutes every secret placeholder, generating them once", async () => {
+    serverFindUnique.mockResolvedValue({ poolerSecretsEnc: null });
+    const rendered = await renderPoolerTemplates("srv-pooler");
+    expect(rendered).toHaveLength(POOLER_TEMPLATE_FILES.length);
+    for (const file of rendered) {
+      expect(file.content).not.toContain("{{");
+      expect(file.remotePath).toBe(`${POOLER_REMOTE_DIR}/${file.relPath}`);
+    }
+    expect(serverUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it("checked-in pooler template references the shared network and both images", async () => {
+    const compose = await readFile(
+      path.join(process.cwd(), "templates", "pooler", "docker-compose.yml"),
+      "utf8",
+    );
+    expect(compose).toContain(POOLER_NETWORK);
+    expect(compose).toContain("external: true");
+    expect(compose).toMatch(/image:\s*supabase\/supavisor:/);
+    expect(compose).toContain('"5432:5432"');
+    expect(compose).toContain('"6543:6543"');
+    expect(compose).toContain("127.0.0.1:4000:4000");
+  });
 });
 
 describe("bootstrap orchestrator", () => {
-  it("skips install/network/firewall on a re-run and still marks the server bootstrapped", async () => {
-    // docker present, network exists, traefik running, ufw has 80+443.
+  it("skips install/network/firewall/pooler on a re-run and still marks the server bootstrapped", async () => {
+    // docker present, networks exist, traefik + pooler running, ufw has all four ports.
     execMock.mockImplementation((_c: unknown, cmd: string) => {
       if (cmd.includes("ps --format json")) return Promise.resolve(ok('[{"State":"running"}]'));
-      if (cmd === "ufw status") return Promise.resolve(ok("80/tcp ALLOW\n443/tcp ALLOW"));
+      if (cmd === "ufw status") {
+        return Promise.resolve(ok("80/tcp ALLOW\n443/tcp ALLOW\n5432/tcp ALLOW\n6543/tcp ALLOW"));
+      }
       return Promise.resolve(ok());
     });
 
@@ -148,10 +196,11 @@ describe("bootstrap orchestrator", () => {
     expect(status).toBe("ok");
     // uploadTraefikConfig and startTraefik always apply (bugfix: a re-run
     // must actually pick up a changed compose file, e.g. an added env var —
-    // not just confirm the old container is still running); only
-    // installDocker, createTraefikNetwork and openFirewall report skipped.
+    // not just confirm the old container is still running); the other five
+    // (installDocker, createTraefikNetwork, createPoolerNetwork, installPooler,
+    // openFirewall) genuinely have nothing to do and report skipped.
     const skipped = lines.filter((l) => l.includes("already done — skipped"));
-    expect(skipped).toHaveLength(3);
+    expect(skipped).toHaveLength(5);
     expect(sftpWriteMock).toHaveBeenCalledTimes(TRAEFIK_TEMPLATE_FILES.length);
     // The actual regression: `docker compose ... up -d` must run even when
     // Traefik was already up, or an uploaded config change is silently inert.
@@ -175,6 +224,7 @@ describe("bootstrap orchestrator", () => {
     const calls: string[] = [];
     let dockerInstalled = false;
     let traefikUp = false;
+    let poolerUp = false;
     execMock.mockImplementation((_c: unknown, cmd: string) => {
       calls.push(cmd);
       if (cmd === "docker compose version") {
@@ -184,9 +234,18 @@ describe("bootstrap orchestrator", () => {
         dockerInstalled = true;
         return Promise.resolve(ok());
       }
-      if (cmd === "docker network inspect traefik") return Promise.resolve(fail());
+      if (cmd === `docker network inspect ${TRAEFIK_NETWORK}`) return Promise.resolve(fail());
+      if (cmd === `docker network inspect ${POOLER_NETWORK}`) return Promise.resolve(fail());
+      // Distinguish the two compose projects' own `ps --format json` checks.
+      if (cmd.includes("wharf-pooler") && cmd.includes("ps --format json")) {
+        return Promise.resolve(poolerUp ? ok('[{"State":"running"}]') : ok(""));
+      }
       if (cmd.includes("ps --format json")) {
         return Promise.resolve(traefikUp ? ok('[{"State":"running"}]') : ok(""));
+      }
+      if (cmd.includes("wharf-pooler") && cmd.includes("up -d")) {
+        poolerUp = true;
+        return Promise.resolve(ok());
       }
       if (cmd.includes("up -d")) {
         traefikUp = true;
@@ -206,11 +265,19 @@ describe("bootstrap orchestrator", () => {
     expect(idx("get.docker.com")).toBeLessThan(idx("docker network create"));
     expect(idx("docker network create")).toBeLessThan(idx("up -d"));
     expect(idx("up -d")).toBeLessThan(idx("ufw allow"));
+    // Both shared networks get created.
+    expect(calls).toContain(`docker network create ${TRAEFIK_NETWORK}`);
+    expect(calls).toContain(`docker network create ${POOLER_NETWORK}`);
     // acme.json prepared with 0600 before Traefik starts
     const acme = calls.find((c) => c.includes("acme.json"))!;
     expect(acme).toContain(`touch ${TRAEFIK_REMOTE_DIR}/acme.json`);
     expect(acme).toContain(`chmod 600 ${TRAEFIK_REMOTE_DIR}/acme.json`);
     expect(calls.indexOf(acme)).toBeLessThan(idx("up -d"));
+    // the joined ufw command covers all four ports
+    const ufwAllow = calls.find((c) => c.includes("ufw allow"))!;
+    for (const port of [80, 443, 5432, 6543]) {
+      expect(ufwAllow).toContain(`ufw allow ${port}/tcp`);
+    }
     // config uploaded to the right places with 0644
     for (const rel of TRAEFIK_TEMPLATE_FILES) {
       expect(sftpWriteMock).toHaveBeenCalledWith(
@@ -220,6 +287,18 @@ describe("bootstrap orchestrator", () => {
         0o644,
       );
     }
+    for (const rel of POOLER_TEMPLATE_FILES) {
+      expect(sftpWriteMock).toHaveBeenCalledWith(
+        expect.anything(),
+        `${POOLER_REMOTE_DIR}/${rel}`,
+        expect.any(String),
+        0o644,
+      );
+    }
+    // the pooler's own secrets were generated and persisted exactly once
+    expect(serverUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ poolerSecretsEnc: expect.anything() }) }),
+    );
   });
 
   it("reports 'ufw not present' as nothing-to-do rather than failing", async () => {
@@ -232,7 +311,7 @@ describe("bootstrap orchestrator", () => {
     const { status, lines } = await watchJob(bootstrapJobId("srv-noufw"));
     expect(status).toBe("ok");
     expect(lines.some((l) => l.includes("ufw not present"))).toBe(true);
-    expect(execMock).not.toHaveBeenCalledWith(expect.anything(), "ufw allow 80/tcp && ufw allow 443/tcp");
+    expect(execMock.mock.calls.some((c) => String(c[1]).includes("ufw allow"))).toBe(false);
   });
 
   it("ends the job in error, releases the lock and leaves the row untouched on failure", async () => {
@@ -293,12 +372,14 @@ describe("bootstrap orchestrator", () => {
     expect(lines.filter((l) => l.includes("output truncated"))).toHaveLength(1);
   });
 
-  it("exposes exactly the five documented steps in order", () => {
+  it("exposes exactly the seven documented steps in order", () => {
     expect(BOOTSTRAP_STEPS.map((s) => s.name)).toEqual([
       "installDocker",
       "createTraefikNetwork",
+      "createPoolerNetwork",
       "uploadTraefikConfig",
       "startTraefik",
+      "installPooler",
       "openFirewall",
     ]);
   });

@@ -49,7 +49,9 @@ const fail = (stderr = "boom") => ({ code: 1, stdout: "", stderr });
 const CLEAN_SS = [
   "State  Recv-Q Send-Q Local Address:Port  Peer Address:Port",
   "LISTEN 0      128    0.0.0.0:22          0.0.0.0:*      users:((\"sshd\",pid=700,fd=3))",
-  "LISTEN 0      128    127.0.0.1:5432      0.0.0.0:*",
+  // An unrelated port, present to prove findListener doesn't false-positive
+  // on ports outside REQUIRED_PORTS.
+  "LISTEN 0      128    127.0.0.1:5433      0.0.0.0:*",
 ].join("\n");
 
 const ROOMY_DF = "/dev/sda1 51475068 8000000 40000000 17% /";
@@ -73,7 +75,9 @@ function healthyHost(overrides: Record<string, unknown> = {}) {
     if (cmd === "id -u") return Promise.resolve(ok("0\n"));
     if (cmd.includes("df -P /opt")) return Promise.resolve(ok(ROOMY_DF));
     if (cmd.includes("ps --format json")) return Promise.resolve(ok('[{"State":"running"}]'));
-    if (cmd === "ufw status") return Promise.resolve(ok("80/tcp ALLOW\n443/tcp ALLOW"));
+    if (cmd === "ufw status") {
+      return Promise.resolve(ok("80/tcp ALLOW\n443/tcp ALLOW\n5432/tcp ALLOW\n6543/tcp ALLOW"));
+    }
     return Promise.resolve(ok());
   });
 }
@@ -130,7 +134,7 @@ describe("preflightServer (/ contract §6)", () => {
   it("passes on a clean host and touches nothing", async () => {
     const { lines, emit } = collector();
     await expect(preflightServer(CONN, emit)).resolves.toBeUndefined();
-    expect(lines.some((l) => l.includes("ports 80 and 443 are free"))).toBe(true);
+    expect(lines.some((l) => l.includes("ports 80, 443, 5432 and 6543 are free"))).toBe(true);
     expect(lines.some((l) => l.includes("running as root"))).toBe(true);
     expect(mutatingCommands()).toEqual([]);
   });
@@ -141,7 +145,7 @@ describe("preflightServer (/ contract §6)", () => {
     });
     const { emit } = collector();
     await expect(preflightServer(CONN, emit)).rejects.toThrow(
-      /port 80 is in use by nginx — a database server must own ports 80 and 443/,
+      /port 80 is in use by nginx — a database server must own ports 80, 443, 5432 and 6543/,
     );
     await expect(preflightServer(CONN, emit)).rejects.toThrow(
       /Use a dedicated server for databases/,
@@ -290,7 +294,7 @@ describe("ensureServerPrepared", () => {
 describe("runBootstrapSteps (shared with the standalone route)", () => {
   it("emits the same markers the standalone bootstrap job relies on", async () => {
     const { lines, emit } = collector();
-    await runBootstrapSteps(CONN, emit);
+    await runBootstrapSteps(CONN, emit, "srv-1");
     expect(lines).toContain("step|› installDocker");
     expect(lines).toContain("ok|✓ installDocker: already done — skipped");
     // uploadTraefikConfig always applies → plain ✓ marker

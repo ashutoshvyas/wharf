@@ -33,7 +33,10 @@ interface RotationTarget {
 
 /** The agreed model/field contract (see prisma/schema.prisma). */
 const TARGETS: RotationTarget[] = [
-  { model: "server", fields: ["sshPasswordEnc", "sshPrivateKeyEnc", "panelUserEnc", "panelPassEnc"] },
+  {
+    model: "server",
+    fields: ["sshPasswordEnc", "sshPrivateKeyEnc", "panelUserEnc", "panelPassEnc", "poolerSecretsEnc"],
+  },
   { model: "website", fields: ["accessPasswordEnc"] },
   { model: "dbInstance", fields: ["pgPasswordEnc", "anonKeyEnc", "serviceRoleKeyEnc", "jwtSecretEnc"] },
 ];
