@@ -22,6 +22,15 @@
  * Failure is terminal (spec §6.1): status → `error`, log tail persisted,
  * remote files deliberately LEFT IN PLACE for inspection, and never an
  * automatic retry — the operator chooses Retry (idempotent `up -d`) or Remove.
+ *
+ * `pooler` is the one exception to "any phase failure aborts the whole job":
+ * by the time it runs, Kong/Studio/db are already up and health-checked, so
+ * the instance is fully usable regardless of whether this separate, optional
+ * capability (direct Postgres access via the shared Supavisor) registers
+ * successfully. A `pooler` failure still reports `✗ pooler: message` and
+ * still ends the job as `error` (so Retry stays available), but secrets are
+ * sealed and persisted first regardless — they must never end up
+ * unrecoverable just because this one extra integration had trouble.
  */
 import path from "node:path";
 import { ensureServerPrepared } from "@/lib/bootstrap/prepare";
@@ -227,6 +236,8 @@ async function runPipeline(
   const emit = makeEmitter(jobId, tail);
   const phaseOpts = { instanceId: row.id, emit, tail };
   const domain = process.env.INSTANCE_DOMAIN ?? "";
+  /** Set inside the pooler phase's own catch — see its comment below. */
+  let poolerFailed: string | null = null;
 
   try {
     // `validate` already ran synchronously in startProvision/retryProvision —
@@ -340,14 +351,29 @@ async function runPipeline(
         await waitForHealthy(conn, row.composeProjectName, emit);
       });
 
-      await runPhase(phaseOpts, "pooler", async () => {
-        await registerPoolerTenant(conn, {
-          serverId: row.serverId,
-          project: row.composeProjectName,
-          pgPassword: generated.pgPassword,
+      // Best-effort from the JOB's perspective, unlike every phase above:
+      // Kong/Studio/db are already up and health-checked at this point, so
+      // the instance is fully usable via its REST API regardless of whether
+      // the pooler (an ADDITIONAL capability layered on top — direct
+      // Postgres wire-protocol access) registers successfully. A failure
+      // here must never leave the instance's own secrets unsaved (they'd be
+      // unrecoverable — see readStoredSecrets/resolveSecrets above for why
+      // that specifically must never happen) just because a separate,
+      // optional integration had trouble. The phase still reports its own
+      // `✗ pooler: message` via runPhase; only the *job's* outcome is
+      // decoupled from it, below.
+      try {
+        await runPhase(phaseOpts, "pooler", async () => {
+          await registerPoolerTenant(conn, {
+            serverId: row.serverId,
+            project: row.composeProjectName,
+            pgPassword: generated.pgPassword,
+          });
+          emit("info", `registered with the shared pooler as postgres.${row.composeProjectName}`);
         });
-        emit("info", `registered with the shared pooler as postgres.${row.composeProjectName}`);
-      });
+      } catch (err) {
+        poolerFailed = err instanceof Error ? err.message : String(err);
+      }
 
       return generated;
     });
@@ -359,7 +385,10 @@ async function runPipeline(
         jwtSecretEnc: sealBytes(secrets.jwtSecret),
         anonKeyEnc: sealBytes(secrets.anonKey),
         serviceRoleKeyEnc: sealBytes(secrets.serviceRoleKey),
-        status: "running",
+        // A pooler failure still leaves a fully usable instance (see above)
+        // — status: error only to keep Retry available for the pooler step
+        // itself; it does not mean the containers or these secrets are bad.
+        status: poolerFailed ? "error" : "running",
         healthCheckedAt: new Date(),
         lastActionLog: tail.text(),
       },
@@ -367,14 +396,16 @@ async function runPipeline(
     await audit({
       userId: ctx.userId,
       userEmail: ctx.userEmail,
-      action: "instance.provision",
+      action: poolerFailed ? "instance.provision.failed" : "instance.provision",
       targetType: "db_instance",
       targetId: row.id,
-      metadata: { slug: row.slug, server: row.serverId },
+      metadata: poolerFailed
+        ? { slug: row.slug, server: row.serverId, error: poolerFailed }
+        : { slug: row.slug, server: row.serverId },
     }).catch((auditErr: unknown) => {
       console.error("[provision] failed to write audit row:", auditErr);
     });
-    endJob(jobId, "ok");
+    endJob(jobId, poolerFailed ? "error" : "ok");
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     // Errors raised outside a phase (SSH connect, lock, …) still need a line.

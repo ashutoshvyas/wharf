@@ -280,6 +280,42 @@ describe("startProvision — failure handling", () => {
     expect(serverLockHolder("srv-1")).toBeNull();
   });
 
+  it("still persists secrets and marks the instance error (not left unrecoverable) when only pooler registration fails", async () => {
+    // Regression: the instance itself (Kong/Studio/db) is fully up and
+    // health-checked by this point — a pooler-only failure must not leave
+    // pgPasswordEnc etc. permanently null (unrecoverable via the Secrets
+    // modal) just because this separate, optional integration had trouble.
+    registerPoolerMock.mockRejectedValue(new Error("Supavisor tenant registration failed (HTTP 400): boom"));
+    await startProvision(BASE);
+    const { status, lines } = await watchJob(provisionJobId("inst-1"));
+
+    expect(status).toBe("error");
+    expect(lines.some((l) => l.includes("✗ pooler") && l.includes("boom"))).toBe(true);
+
+    const errUpdate = instanceUpdate.mock.calls
+      .map((c) => c[0] as { data?: Record<string, unknown> })
+      .find((c) => c.data?.status === "error");
+    expect(errUpdate).toBeTruthy();
+    // The secrets from THIS run must still be there — not left null.
+    expect(errUpdate!.data!.pgPasswordEnc).toBeInstanceOf(Uint8Array);
+    expect(errUpdate!.data!.anonKeyEnc).toBeInstanceOf(Uint8Array);
+    expect(errUpdate!.data!.serviceRoleKeyEnc).toBeInstanceOf(Uint8Array);
+    expect(errUpdate!.data!.jwtSecretEnc).toBeInstanceOf(Uint8Array);
+    // Never recorded as running.
+    expect(
+      instanceUpdate.mock.calls.some(
+        (c) => (c[0] as { data?: { status?: string } }).data?.status === "running",
+      ),
+    ).toBe(false);
+    expect(auditMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "instance.provision.failed",
+        metadata: expect.objectContaining({ error: expect.stringContaining("boom") }),
+      }),
+    );
+    expect(serverLockHolder("srv-1")).toBeNull();
+  });
+
   it("fails the job when preparation aborts (e.g. preflight port conflict)", async () => {
     ensurePreparedMock.mockRejectedValue(
       new Error("port 80 is in use — a database server must own ports 80 and 443"),
