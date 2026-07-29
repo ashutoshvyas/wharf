@@ -72,3 +72,20 @@ export function subdomainsFor(slug: string, domain: string): InstanceSubdomains 
     studioSubdomain: `studio-${slug}.${domain}`,
   };
 }
+
+/**
+ * The network alias this instance's `db` service is given on POOLER_NETWORK
+ * (lib/provision/render.ts) — also what lib/provision/pooler.ts sends
+ * Supavisor as `db_host` when registering the tenant. Both call this instead
+ * of interpolating `project` directly: `composeProjectName` is `sb_` + hex
+ * (an underscore), and Erlang's built-in DNS resolver — which Supavisor uses
+ * to look up `db_host` — is well known to fail on hostnames containing
+ * underscores, silently falling back to an IPv6 guess that then can't
+ * connect on an IPv4-only Docker network. Every OTHER alias already in this
+ * codebase avoids underscores for the same reason (`api-gw`,
+ * `realtime-dev.supabase-realtime` — see render.ts's top-of-template
+ * comment); this hyphenates the project name to match.
+ */
+export function poolerDbAlias(project: string): string {
+  return `${project.replace(/_/g, "-")}-db`;
+}

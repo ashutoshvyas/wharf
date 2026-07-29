@@ -1,8 +1,10 @@
 /**
  * Shared per-server Supavisor pooler — tenant register/deregister.
  *
- * Every instance's `db` joins POOLER_NETWORK under the alias `{project}-db`
- * (lib/provision/render.ts). This module is the other half: telling the one
+ * Every instance's `db` joins POOLER_NETWORK under the alias
+ * `poolerDbAlias(project)` (lib/provision/naming.ts, used by both
+ * lib/provision/render.ts and this file so they can never drift out of
+ * sync). This module is the other half: telling the one
  * shared Supavisor container on that server about a tenant, via its admin
  * HTTP API (`PUT`/`DELETE /api/tenants/:external_id` — see
  * templates/pooler/VERSIONS.md for the upstream API this targets).
@@ -19,6 +21,7 @@ import { SignJWT } from "jose";
 import { POOLER_ADMIN_PORT } from "@/lib/bootstrap/constants";
 import { ensurePoolerSecrets } from "@/lib/bootstrap/pooler-secrets";
 import { exec } from "@/lib/ssh";
+import { poolerDbAlias } from "./naming";
 
 type SshConnection = Parameters<typeof exec>[0];
 
@@ -114,7 +117,7 @@ export async function registerPoolerTenant(
   const bearer = await adminBearer(input.serverId);
   const body = JSON.stringify({
     tenant: {
-      db_host: `${input.project}-db`,
+      db_host: poolerDbAlias(input.project),
       db_port: 5432,
       db_database: "postgres",
       // Required by Supavisor's own tenant changeset (`validate_required` in
@@ -128,6 +131,11 @@ export async function registerPoolerTenant(
       // the manager user via an `auth_query` we never configured, which
       // fails and is the other half of why tenant creation 400ed.
       require_user: true,
+      // wharf-pooler is an IPv4-only Docker bridge network; without this,
+      // Supavisor's own IP-version auto-detection falls back to a guess
+      // whenever it can't resolve db_host (see poolerDbAlias's doc comment —
+      // the alias must never contain an underscore for exactly this reason).
+      ip_version: "v4",
       default_pool_size: 15,
       default_max_clients: 200,
       users: [

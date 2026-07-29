@@ -3,6 +3,7 @@ import {
   composeProjectName,
   INSTANCES_ROOT,
   isValidSlug,
+  poolerDbAlias,
   PROJECT_RE,
   remotePathFor,
   SLUG_MAX_LENGTH,
@@ -83,5 +84,19 @@ describe("isValidSlug", () => {
     expect(SLUG_MAX_LENGTH).toBe(40);
     expect(isValidSlug("a".repeat(40))).toBe(true);
     expect(isValidSlug("a".repeat(41))).toBe(false);
+  });
+});
+
+describe("poolerDbAlias", () => {
+  it("hyphenates every underscore in the project name", () => {
+    // composeProjectName() is always `sb_` + hex — the underscore must never
+    // reach the alias: Erlang's DNS resolver (which Supavisor uses) is known
+    // to fail on underscored hostnames.
+    expect(poolerDbAlias("sb_4f2a")).toBe("sb-4f2a-db");
+    expect(poolerDbAlias("sb_4f2a")).not.toContain("_");
+  });
+
+  it("is a pure function of its input", () => {
+    expect(poolerDbAlias("sb_dead")).toBe(poolerDbAlias("sb_dead"));
   });
 });

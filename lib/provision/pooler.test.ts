@@ -54,13 +54,15 @@ describe("registerPoolerTenant", () => {
     const body = /-d '(\{.*\})'/.exec(cmd)?.[1];
     expect(JSON.parse(body!)).toEqual({
       tenant: {
-        db_host: "sb_4f2a-db",
+        // Hyphenated, not "sb_4f2a-db" — see naming.ts's poolerDbAlias.
+        db_host: "sb-4f2a-db",
         db_port: 5432,
         db_database: "postgres",
-        // Both required for tenant creation to succeed against a real
-        // Supavisor — see the module's inline comments for why.
+        // All required (or defensive) for tenant creation to succeed against
+        // a real Supavisor — see the module's inline comments for why.
         default_parameter_status: {},
         require_user: true,
+        ip_version: "v4",
         default_pool_size: 15,
         default_max_clients: 200,
         users: [

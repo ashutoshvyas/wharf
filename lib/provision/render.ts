@@ -39,7 +39,7 @@ import {
   WHARF_AUTH_MIDDLEWARE,
   WHARF_STUDIO_FRAME_MIDDLEWARE,
 } from "@/lib/bootstrap/constants";
-import { isValidSlug, PROJECT_RE, subdomainsFor } from "./naming";
+import { isValidSlug, poolerDbAlias, PROJECT_RE, subdomainsFor } from "./naming";
 import {
   deriveAnalyticsSecrets,
   deriveAncillarySecrets,
@@ -322,7 +322,7 @@ function validateInput(input: RenderInstanceInput): void {
  * Attach `network` to a service, preserving any existing per-network config.
  * An optional `alias` (map form only) is how the shared Supavisor pooler
  * tells one instance's `db` apart from every other's on the same network —
- * see `${project}-db` below.
+ * see poolerDbAlias() below.
  */
 function joinNetwork(service: ComposeService, network: string, alias?: string): void {
   if (Array.isArray(service.networks)) {
@@ -371,9 +371,9 @@ async function renderCompose(
   // The shared per-server Supavisor pooler (lib/bootstrap/steps.ts
   // `installPooler`) reaches this instance's Postgres over POOLER_NETWORK,
   // under an alias scoped to this project so it can tell tenants apart —
-  // lib/provision/pipeline.ts's `pooler` phase registers `{project}-db` as
-  // this tenant's db_host.
-  joinNetwork(db, POOLER_NETWORK, `${input.project}-db`);
+  // lib/provision/pipeline.ts's `pooler` phase registers this same
+  // poolerDbAlias() value as the tenant's db_host.
+  joinNetwork(db, POOLER_NETWORK, poolerDbAlias(input.project));
 
   // Belt and braces for invariants 2 and 4: nothing but kong/studio may reach
   // the Traefik network, and nothing but db may reach the pooler network.
@@ -410,7 +410,7 @@ async function renderCompose(
     `# Instance: ${input.slug}   project: ${input.project}   path: ${input.remotePath}`,
     `# API:    https://${apiSubdomain}    -> kong:${KONG_HTTP_CONTAINER_PORT} (public, no auth middleware)`,
     `# Studio: https://${studioSubdomain} -> studio:${STUDIO_CONTAINER_PORT} (behind ${WHARF_AUTH_MIDDLEWARE})`,
-    `# Pooler: registered with the server's shared Supavisor as db_host ${input.project}-db`,
+    `# Pooler: registered with the server's shared Supavisor as db_host ${poolerDbAlias(input.project)}`,
     `#         (postgres.${input.project}@<server host>:5432 / :6543 — see lib/provision/pipeline.ts)`,
     `# Re-running provisioning overwrites this file. Source template:`,
     `# ${TEMPLATE_DIR}/docker-compose.yml (see VERSIONS.md for the upstream ref).`,

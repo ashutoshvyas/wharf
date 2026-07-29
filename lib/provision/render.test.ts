@@ -208,7 +208,11 @@ describe("renderInstanceCompose — networks", () => {
     expect(nets).toContain(POOLER_NETWORK);
     expect(nets).toContain("default");
     const networks = doc.services.db?.networks as Record<string, { aliases?: string[] }>;
-    expect(networks[POOLER_NETWORK]?.aliases).toEqual(["sb_4f2a-db"]);
+    // Hyphenated, not `sb_4f2a-db` — the underscore in composeProjectName
+    // must never reach this alias (see naming.ts's poolerDbAlias doc comment
+    // for why: Erlang's DNS resolver, which Supavisor uses, is known to fail
+    // on underscored hostnames).
+    expect(networks[POOLER_NETWORK]?.aliases).toEqual(["sb-4f2a-db"]);
   });
 
   it("keeps every service other than db off the pooler network", async () => {
