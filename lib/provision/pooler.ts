@@ -40,13 +40,56 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
+/**
+ * Deliberately NOT `curl -f`: that flag discards the response body on a 4xx/5xx,
+ * which is exactly the text Supavisor's admin API explains itself with (its
+ * `TenantController` renders `{"error": "..."}` for every 400/404/422). `-w`
+ * appends the HTTP status on its own trailing line so {@link parseCurlOutput}
+ * can split it back out and surface Supavisor's own message instead of a bare
+ * "curl exit 22".
+ */
 function curlCommand(method: "PUT" | "DELETE", url: string, bearer: string, body?: string): string {
-  const parts = ["curl", "-fsS", "-X", method, "-H", shellQuote(`Authorization: Bearer ${bearer}`)];
+  const parts = [
+    "curl",
+    "-sS",
+    "-w",
+    // Literal two-char `\n` — curl's own -w format-string parser converts
+    // it to a newline; an embedded raw newline byte here would rely on
+    // unspecified passthrough behavior instead of curl's documented escape.
+    shellQuote("\\n%{http_code}"),
+    "-X",
+    method,
+    "-H",
+    shellQuote(`Authorization: Bearer ${bearer}`),
+  ];
   if (body !== undefined) {
     parts.push("-H", shellQuote("Content-Type: application/json"), "-d", shellQuote(body));
   }
   parts.push(shellQuote(url));
   return parts.join(" ");
+}
+
+/** Split curl's `-w '\n%{http_code}'`-suffixed stdout back into body + status. */
+function parseCurlOutput(stdout: string): { httpCode: number; body: string } {
+  const idx = stdout.lastIndexOf("\n");
+  if (idx < 0) return { httpCode: Number(stdout.trim()) || 0, body: "" };
+  return { httpCode: Number(stdout.slice(idx + 1).trim()) || 0, body: stdout.slice(0, idx) };
+}
+
+/** Throws with Supavisor's own error body when curl ran but the HTTP call didn't 2xx. */
+function assertOk(
+  action: string,
+  res: { code: number | null; stdout: string; stderr: string },
+  opts: { allow404?: boolean } = {},
+): void {
+  if (res.code !== 0) {
+    throw new Error(`Supavisor ${action} failed (curl exit ${res.code}): ${(res.stderr || res.stdout).trim()}`);
+  }
+  const { httpCode, body } = parseCurlOutput(res.stdout);
+  if (httpCode === 404 && opts.allow404) return; // already gone — not a failure
+  if (httpCode < 200 || httpCode >= 300) {
+    throw new Error(`Supavisor ${action} failed (HTTP ${httpCode}): ${body.trim() || "(empty response body)"}`);
+  }
 }
 
 export interface PoolerTenantInput {
@@ -74,6 +117,17 @@ export async function registerPoolerTenant(
       db_host: `${input.project}-db`,
       db_port: 5432,
       db_database: "postgres",
+      // Required by Supavisor's own tenant changeset (`validate_required` in
+      // Supavisor.Tenants.Tenant) — omitting it makes tenant creation 400.
+      // `{}` is exactly what Supavisor's own seeds use for a plain tenant.
+      default_parameter_status: {},
+      // WHARF already knows this tenant's real Postgres password (it's the
+      // instance's own generated pgPassword) — require_user tells Supavisor
+      // to validate a connecting client's credentials directly against the
+      // `users` entry below. Without it, Supavisor instead tries to verify
+      // the manager user via an `auth_query` we never configured, which
+      // fails and is the other half of why tenant creation 400ed.
+      require_user: true,
       default_pool_size: 15,
       default_max_clients: 200,
       users: [
@@ -91,11 +145,7 @@ export async function registerPoolerTenant(
     conn,
     curlCommand("PUT", `${ADMIN_BASE}/api/tenants/${input.project}`, bearer, body),
   );
-  if (res.code !== 0) {
-    throw new Error(
-      `Supavisor tenant registration failed (curl exit ${res.code}): ${(res.stderr || res.stdout).trim()}`,
-    );
-  }
+  assertOk("tenant registration", res);
 }
 
 /**
@@ -110,9 +160,6 @@ export async function deregisterPoolerTenant(
 ): Promise<void> {
   const bearer = await adminBearer(serverId);
   const res = await exec(conn, curlCommand("DELETE", `${ADMIN_BASE}/api/tenants/${project}`, bearer));
-  if (res.code !== 0) {
-    throw new Error(
-      `Supavisor tenant deregistration failed (curl exit ${res.code}): ${(res.stderr || res.stdout).trim()}`,
-    );
-  }
+  // A 404 means it's already gone (e.g. a retried teardown) — not a failure.
+  assertOk("tenant deregistration", res, { allow404: true });
 }
