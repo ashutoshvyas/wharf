@@ -266,11 +266,11 @@ describe("startRemove (teardown job)", () => {
     expect(softDelete).toBeTruthy();
   });
 
-  it("skips pooler deregistration entirely in force mode", async () => {
+  it("still attempts pooler deregistration in force mode when the server is reachable", async () => {
     instanceFindUnique.mockResolvedValue({ ...ROW_ERRORED });
     await startRemove("inst-1", CTX, { force: true });
     await watchJob(removeJobId("inst-1"));
-    expect(deregisterPoolerMock).not.toHaveBeenCalled();
+    expect(deregisterPoolerMock).toHaveBeenCalledWith(expect.anything(), "srv-1", "sb_4f2a");
   });
 });
 
@@ -285,24 +285,29 @@ describe("startRemove — force (unreachable-server escape hatch)", () => {
     expect(withConnectionMock).not.toHaveBeenCalled();
   });
 
-  it("skips SSH entirely and soft-deletes when forced on an errored instance", async () => {
+  it("attempts the real cleanup when forced and the server IS reachable, then soft-deletes", async () => {
     instanceFindUnique.mockResolvedValue({ ...ROW_ERRORED });
+    const calls: string[] = [];
+    execMock.mockImplementation((_c: unknown, cmd: string) => {
+      calls.push(cmd);
+      if (cmd.includes("volume ls")) return Promise.resolve(ok(""));
+      return Promise.resolve(ok());
+    });
 
     const res = await startRemove("inst-1", CTX, { force: true });
     expect(res).toHaveProperty("jobId");
     const { status, lines } = await watchJob(removeJobId("inst-1"));
     expect(status).toBe("ok");
 
-    // No SSH connection was ever attempted.
-    expect(withConnectionMock).not.toHaveBeenCalled();
-    expect(execMock).not.toHaveBeenCalled();
-    expect(lines.some((l) => l.includes("force remove"))).toBe(true);
+    // The SSH connection IS used — this is the fix: force no longer skips
+    // real cleanup, it only tolerates a failure in it.
+    expect(withConnectionMock).toHaveBeenCalled();
+    expect(calls.some((c) => c.includes("down -v"))).toBe(true);
+    expect(calls.some((c) => c.startsWith("rm -rf"))).toBe(true);
 
-    // Only the metadata phase ran — stop/volumes/files never did.
-    expect(lines.some((l) => l.includes("› metadata"))).toBe(true);
-    expect(lines.some((l) => l.includes("✓ metadata"))).toBe(true);
-    for (const phase of ["stop", "volumes", "files"]) {
-      expect(lines.some((l) => l.includes(`› ${phase}`))).toBe(false);
+    for (const phase of ["stop", "volumes", "files", "metadata"]) {
+      expect(lines.some((l) => l.includes(`› ${phase}`))).toBe(true);
+      expect(lines.some((l) => l.includes(`✓ ${phase}`))).toBe(true);
     }
 
     const softDelete = instanceUpdate.mock.calls.find(
@@ -312,9 +317,58 @@ describe("startRemove — force (unreachable-server escape hatch)", () => {
     expect(auditMock).toHaveBeenCalledWith(
       expect.objectContaining({
         action: "instance.remove",
-        metadata: expect.objectContaining({ forced: true }),
+        metadata: expect.objectContaining({ forced: true, remoteCleanupFailed: false }),
       }),
     );
+  });
+
+  it("still soft-deletes when forced and the server is unreachable (SSH never connects)", async () => {
+    instanceFindUnique.mockResolvedValue({ ...ROW_ERRORED });
+    withConnectionMock.mockRejectedValue(new Error("All configured authentication methods failed"));
+
+    const res = await startRemove("inst-1", CTX, { force: true });
+    expect(res).toHaveProperty("jobId");
+    const { status, lines } = await watchJob(removeJobId("inst-1"));
+
+    expect(status).toBe("ok");
+    expect(lines.some((l) => l.includes("authentication methods failed"))).toBe(true);
+    expect(lines.some((l) => l.includes("force remove: continuing"))).toBe(true);
+    // None of the remote phases ever started — the connection itself failed.
+    for (const phase of ["stop", "volumes", "files"]) {
+      expect(lines.some((l) => l.includes(`› ${phase}`))).toBe(false);
+    }
+    expect(lines.some((l) => l.includes("› metadata"))).toBe(true);
+    expect(lines.some((l) => l.includes("✓ metadata"))).toBe(true);
+
+    const softDelete = instanceUpdate.mock.calls.find(
+      (c) => (c[0] as { data?: { deletedAt?: unknown } })?.data?.deletedAt != null,
+    );
+    expect(softDelete).toBeTruthy();
+    expect(auditMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "instance.remove",
+        metadata: expect.objectContaining({ forced: true, remoteCleanupFailed: true }),
+      }),
+    );
+  });
+
+  it("still soft-deletes when forced and a remote phase fails (e.g. volumes survive)", async () => {
+    instanceFindUnique.mockResolvedValue({ ...ROW_ERRORED });
+    execMock.mockImplementation((_c: unknown, cmd: string) => {
+      if (cmd.includes("volume ls")) return Promise.resolve(ok("sb_4f2a_db-data\n"));
+      return Promise.resolve(ok());
+    });
+
+    await startRemove("inst-1", CTX, { force: true });
+    const { status, lines } = await watchJob(removeJobId("inst-1"));
+
+    expect(status).toBe("ok");
+    expect(lines.some((l) => l.includes("✗ volumes"))).toBe(true);
+    expect(lines.some((l) => l.includes("force remove: continuing"))).toBe(true);
+    const softDelete = instanceUpdate.mock.calls.find(
+      (c) => (c[0] as { data?: { deletedAt?: unknown } })?.data?.deletedAt != null,
+    );
+    expect(softDelete).toBeTruthy();
   });
 
   it("still holds and releases the per-server lock during a forced removal", async () => {

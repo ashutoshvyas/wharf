@@ -13,6 +13,18 @@
  * re-derived and compared against `/opt/db-instances/{composeProjectName}`
  * immediately before the delete; anything else aborts the job loudly rather
  * than deleting a path an attacker (or a bad migration) put on the row.
+ *
+ * **Force remove always attempts the real cleanup too.** It used to skip the
+ * SSH-based stop/volumes/files phases outright; that left a `force`-removed
+ * instance's containers, volumes and `/opt/db-instances/{project}` directory
+ * stranded on disk forever — invisible to orphan detection (which treats any
+ * soft-deleted row's project as "known", see lib/instances/orphans.ts) and
+ * with no other tool that would ever come back for them. Force now runs
+ * exactly the same stop/volumes/files phases as a normal remove; the only
+ * difference is that a failure there (including the SSH connection itself
+ * never opening) is caught and logged rather than aborting the job — WHARF's
+ * own metadata row is soft-deleted regardless, which is the one guarantee
+ * `force` exists to make for an instance stuck in `error`.
  */
 import { audit } from "@/lib/audit";
 import { prisma } from "@/lib/db";
@@ -67,13 +79,14 @@ export type StartRemoveResult = { jobId: string } | { busy: string } | { invalid
  * Kick off a detached teardown job. The instance is flipped to `removing`
  * before the job starts so a concurrent reader never sees it as healthy.
  *
- * `force`: skip the SSH-based stop/volumes/files phases and only remove
- * WHARF's own metadata — for an instance whose server can never be reached
- * (bad/missing credentials, decommissioned box), since the normal path
- * requires connecting before it can do anything at all. Restricted to
- * instances already in `error` — a healthy instance always has a reachable
- * server, so skipping cleanup there would abandon real running resources for
- * no reason; `error` is exactly the state that means normal remove can't work.
+ * `force`: still attempts the same SSH-based stop/volumes/files cleanup a
+ * normal remove does, but never lets a failure there (unreachable server,
+ * bad/missing credentials, a decommissioned box, a docker error) block
+ * removing WHARF's own metadata — that guarantee is what `force` is for.
+ * Restricted to instances already in `error`: a healthy instance's normal
+ * remove either succeeds or leaves useful evidence of what broke, so there is
+ * no reason to reach for the "clean up anyway" escape hatch until that has
+ * already been tried once.
  */
 export async function startRemove(
   instanceId: string,
@@ -161,79 +174,97 @@ async function runTeardown(
   const emit = makeEmitter(jobId, tail);
   const phaseOpts = { instanceId: row.id, emit, tail };
   let volumesRemoved: string[] = [];
+  let remoteCleanupFailed = false;
+
+  /** The real cleanup — identical whether this is a normal or a force remove. */
+  const attemptRemoteCleanup = async (): Promise<void> => {
+    await withConnection(row.serverId, async (conn: SshConnection) => {
+      // ── stop: containers AND named volumes in one idempotent command ──
+      await runPhase(phaseOpts, "stop", async () => {
+        // Best-effort: deregistering first stops the shared pooler routing
+        // to this tenant before its containers disappear. A failure here
+        // (pooler unreachable, already gone, …) must never block removal —
+        // there is nothing left to protect once the containers and volumes
+        // below are gone anyway.
+        await deregisterPoolerTenant(conn, row.serverId, row.composeProjectName).catch(
+          (err: unknown) => {
+            const message = err instanceof Error ? err.message : String(err);
+            emit("info", `warning: could not deregister from the shared pooler (continuing): ${message}`);
+          },
+        );
+
+        volumesRemoved = await listVolumes(conn, row.composeProjectName);
+        const res = await exec(
+          conn,
+          `docker compose -p ${row.composeProjectName} down -v`,
+          { timeoutMs: 180_000 },
+        );
+        if (res.code !== 0) {
+          throw new Error(
+            `docker compose down -v failed (code ${res.code}): ${res.stderr.trim()}`,
+          );
+        }
+        emit("info", `stopped and removed containers for ${row.composeProjectName}`);
+      });
+
+      // ── volumes: prove the data is really gone ────────────────────────
+      await runPhase(phaseOpts, "volumes", async () => {
+        let left = await listVolumes(conn, row.composeProjectName);
+        if (left.length > 0) {
+          emit("info", `still present after down -v, removing explicitly: ${left.join(", ")}`);
+          await exec(conn, `docker volume rm -f ${left.join(" ")}`, { timeoutMs: 60_000 });
+          left = await listVolumes(conn, row.composeProjectName);
+        }
+        if (left.length > 0) {
+          throw new Error(
+            `volumes still exist after removal: ${left.join(", ")} — something is still ` +
+              "using them. Remove them manually and retry.",
+          );
+        }
+        emit(
+          "info",
+          volumesRemoved.length > 0
+            ? `removed ${volumesRemoved.length} volume(s): ${volumesRemoved.join(", ")}`
+            : "no named volumes found for this project",
+        );
+      });
+
+      // ── files: the guarded rm -rf ──────────────────────────────────────
+      await runPhase(phaseOpts, "files", async () => {
+        const safePath = assertSafeRemotePath(row.remotePath, row.composeProjectName);
+        const res = await exec(conn, `rm -rf ${safePath}`, { timeoutMs: 60_000 });
+        if (res.code !== 0) {
+          throw new Error(`rm -rf ${safePath} failed (code ${res.code}): ${res.stderr.trim()}`);
+        }
+        emit("info", `deleted ${safePath}`);
+      });
+    });
+  };
 
   try {
     if (force) {
-      emit(
-        "info",
-        "force remove: no SSH connection is attempted — the stop/volumes/files " +
-          "phases are skipped entirely. Anything that exists on the remote " +
-          "server for this instance — including its shared-pooler tenant " +
-          "registration — is left untouched; only WHARF's own metadata row " +
-          "is removed.",
-      );
+      // Never let a remote failure here block the metadata cleanup below —
+      // that guarantee is the entire point of `force`. A phase's own error
+      // already emitted its `✗ phase: message` line (runPhase); a failure
+      // before any phase starts (e.g. the SSH connection itself) has not, so
+      // it gets one here.
+      try {
+        await attemptRemoteCleanup();
+      } catch (err) {
+        remoteCleanupFailed = true;
+        const message = err instanceof Error ? err.message : String(err);
+        if (!(err as { phaseReported?: boolean })?.phaseReported) {
+          emit("err", `remote cleanup failed: ${message}`);
+        }
+        emit(
+          "info",
+          "force remove: continuing to remove WHARF's own metadata despite the " +
+            "remote cleanup failure above — anything left on the server was not cleaned up.",
+        );
+        await persistLogTail(row.id, tail);
+      }
     } else {
-      await withConnection(row.serverId, async (conn: SshConnection) => {
-        // ── stop: containers AND named volumes in one idempotent command ──
-        await runPhase(phaseOpts, "stop", async () => {
-          // Best-effort: deregistering first stops the shared pooler routing
-          // to this tenant before its containers disappear. A failure here
-          // (pooler unreachable, already gone, …) must never block removal —
-          // there is nothing left to protect once the containers and volumes
-          // below are gone anyway.
-          await deregisterPoolerTenant(conn, row.serverId, row.composeProjectName).catch(
-            (err: unknown) => {
-              const message = err instanceof Error ? err.message : String(err);
-              emit("info", `warning: could not deregister from the shared pooler (continuing): ${message}`);
-            },
-          );
-
-          volumesRemoved = await listVolumes(conn, row.composeProjectName);
-          const res = await exec(
-            conn,
-            `docker compose -p ${row.composeProjectName} down -v`,
-            { timeoutMs: 180_000 },
-          );
-          if (res.code !== 0) {
-            throw new Error(
-              `docker compose down -v failed (code ${res.code}): ${res.stderr.trim()}`,
-            );
-          }
-          emit("info", `stopped and removed containers for ${row.composeProjectName}`);
-        });
-
-        // ── volumes: prove the data is really gone ────────────────────────
-        await runPhase(phaseOpts, "volumes", async () => {
-          let left = await listVolumes(conn, row.composeProjectName);
-          if (left.length > 0) {
-            emit("info", `still present after down -v, removing explicitly: ${left.join(", ")}`);
-            await exec(conn, `docker volume rm -f ${left.join(" ")}`, { timeoutMs: 60_000 });
-            left = await listVolumes(conn, row.composeProjectName);
-          }
-          if (left.length > 0) {
-            throw new Error(
-              `volumes still exist after removal: ${left.join(", ")} — something is still ` +
-                "using them. Remove them manually and retry.",
-            );
-          }
-          emit(
-            "info",
-            volumesRemoved.length > 0
-              ? `removed ${volumesRemoved.length} volume(s): ${volumesRemoved.join(", ")}`
-              : "no named volumes found for this project",
-          );
-        });
-
-        // ── files: the guarded rm -rf ──────────────────────────────────────
-        await runPhase(phaseOpts, "files", async () => {
-          const safePath = assertSafeRemotePath(row.remotePath, row.composeProjectName);
-          const res = await exec(conn, `rm -rf ${safePath}`, { timeoutMs: 60_000 });
-          if (res.code !== 0) {
-            throw new Error(`rm -rf ${safePath} failed (code ${res.code}): ${res.stderr.trim()}`);
-          }
-          emit("info", `deleted ${safePath}`);
-        });
-      });
+      await attemptRemoteCleanup();
     }
 
     // ── metadata: soft delete + unlink websites ───────────────────────────
@@ -280,6 +311,10 @@ async function runTeardown(
         server: row.serverId,
         volumesRemoved: volumesRemoved.length,
         forced: force,
+        // Only meaningful when forced: true — a normal remove that hit a
+        // remote failure never reaches this audit row at all (see the catch
+        // block below, `instance.remove.failed`).
+        remoteCleanupFailed,
       },
     }).catch((auditErr: unknown) => {
       console.error("[teardown] failed to write audit row:", auditErr);

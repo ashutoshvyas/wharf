@@ -252,7 +252,7 @@ export function DatabasesView({
         typeToConfirm={removeFor?.name}
         requireAck={
           removeFor?.status === "error"
-            ? "Skip remote cleanup — this server can't be reached, so nothing there will be stopped or deleted. Only WHARF's own record is removed."
+            ? "Remove WHARF's record regardless of whether the server can be reached — WHARF still tries to stop containers and delete volumes/files there first, but a connection failure won't block the removal."
             : undefined
         }
         onAckChange={setForceRemove}
@@ -265,9 +265,11 @@ export function DatabasesView({
           <p>
             Remove WHARF&apos;s record of{" "}
             <span className="font-mono text-[12.5px] text-ink">{removeFor?.name}</span>{" "}
-            <b className="text-danger">without connecting to its server.</b> Any
-            containers, volumes, or files that exist there are left exactly as
-            they are — use this only when the server is confirmed unreachable.
+            <b className="text-danger">even if its server can&apos;t be reached.</b>{" "}
+            WHARF still attempts the same cleanup as a normal remove (containers,
+            volumes, files); if that fails or the server is unreachable, only
+            WHARF&apos;s own record is removed and anything left on the server
+            stays exactly as it is.
           </p>
         ) : (
           <>
