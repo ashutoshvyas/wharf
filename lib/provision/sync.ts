@@ -54,12 +54,18 @@ import {
 } from "./pipeline";
 import {
   countTables,
+  emitCapturedOutput,
+  listTables,
   loadDumpIntoTarget,
+  parseTableList,
   pgPasswordEnv,
   reassertInstanceRoles,
   reassertSchemaPrivileges,
   resolveAdminUser,
   shellQuote,
+  sqlIdent,
+  sqlLiteral,
+  TABLE_LIST_SQL,
   takeSafetySnapshot,
 } from "./restore-core";
 import { assertSafeRemotePath } from "./teardown";
@@ -488,6 +494,157 @@ async function existingSourceTables(
   return candidates.filter((t) => present.has(t));
 }
 
+/**
+ * Install the SOURCE's extensions on the TARGET, before any dump is loaded.
+ *
+ * `pg_dump --schema=...` (which every pass here uses) does NOT emit
+ * `CREATE EXTENSION`: extensions are database-level objects living outside the
+ * dumped schema. A source using pgvector/PostGIS/pg_trgm therefore produces a
+ * dump full of columns and functions typed `extensions.vector` with nothing
+ * to define that type, and pg_restore fails every object that references it
+ * while everything else restores perfectly.
+ *
+ * That asymmetry is what makes the bug so hard to see from the outside: the
+ * field report this fixes had `shlokas`, `knowledge_chunks` and
+ * `verse_commentary_chunks` missing out of 59 tables — precisely the three
+ * carrying an embedding column — with the sync reporting success.
+ *
+ * The extension must land in the SAME schema as on the source. That is not
+ * cosmetic: the dump spells the type `<schema>.vector`, so a copy installed
+ * anywhere else does not satisfy it.
+ *
+ * Best-effort per extension — one this image cannot provide is named and
+ * skipped rather than failing the whole sync, since the rest of the data is
+ * still worth having and the operator needs to know which one was missing.
+ */
+async function replicateSourceExtensions(
+  conn: SshConnection,
+  ctx: { compose: string; srcEnv: string; connInfo: string },
+  target: { compose: string; pgEnv: string; user: string },
+  emit: EmitFn,
+): Promise<void> {
+  const srcRes = await exec(
+    conn,
+    `${ctx.compose} exec -T ${ctx.srcEnv} db psql ${shellQuote(ctx.connInfo)} -At -c ` +
+      shellQuote(
+        "select e.extname || E'\\t' || n.nspname from pg_extension e " +
+          "join pg_namespace n on n.oid = e.extnamespace order by 1",
+      ),
+    { timeoutMs: CONNECT_TIMEOUT_MS },
+  );
+  if (srcRes.code !== 0) {
+    emit(
+      "info",
+      `could not list the source's extensions (code ${srcRes.code}): ${srcRes.stderr.trim()} — ` +
+        "continuing, but any table using an extension type may fail to restore.",
+    );
+    return;
+  }
+  const wanted = srcRes.stdout
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((l) => l.split("\t"))
+    .filter((p): p is [string, string] => p.length === 2 && !!p[0] && !!p[1]);
+  if (wanted.length === 0) return;
+
+  const [installedRes, availableRes] = await Promise.all([
+    exec(
+      conn,
+      `${target.compose} exec -T db psql -U ${target.user} -d postgres -At -c ` +
+        shellQuote("select extname from pg_extension"),
+    ),
+    exec(
+      conn,
+      `${target.compose} exec -T db psql -U ${target.user} -d postgres -At -c ` +
+        shellQuote("select name from pg_available_extensions"),
+    ),
+  ]);
+  if (installedRes.code !== 0 || availableRes.code !== 0) {
+    emit("info", "could not inspect this instance's extensions — skipping extension sync");
+    return;
+  }
+  const installed = new Set(parseTableList(installedRes.stdout));
+  const available = new Set(parseTableList(availableRes.stdout));
+
+  const missing = wanted.filter(([name]) => !installed.has(name));
+  if (missing.length === 0) {
+    emit("info", "every extension the source uses is already installed here");
+    return;
+  }
+  const unavailable = missing.filter(([name]) => !available.has(name));
+  const creatable = missing.filter(([name]) => available.has(name));
+  if (unavailable.length > 0) {
+    emit(
+      "err",
+      `this Postgres image does not provide ${unavailable.map(([n]) => n).join(", ")} — ` +
+        "any table, column or function in the source that depends on them CANNOT be " +
+        "restored. The rest of the sync continues.",
+    );
+  }
+  if (creatable.length === 0) return;
+
+  // No ON_ERROR_STOP: one extension that refuses must not prevent the others
+  // from being created. What actually landed is verified immediately below.
+  const sql = creatable
+    .map(
+      ([name, schema]) =>
+        `CREATE SCHEMA IF NOT EXISTS ${sqlIdent(schema)}; ` +
+        `CREATE EXTENSION IF NOT EXISTS ${sqlIdent(name)} WITH SCHEMA ${sqlIdent(schema)};`,
+    )
+    .join("\n");
+  const applyRes = await exec(
+    conn,
+    `${target.compose} exec -T db psql -U ${target.user} -d postgres -c ${shellQuote(sql)}`,
+    { timeoutMs: CONNECT_TIMEOUT_MS },
+  );
+  if (applyRes.code !== 0) emitCapturedOutput(emit, applyRes.stderr);
+
+  const verifyRes = await exec(
+    conn,
+    `${target.compose} exec -T db psql -U ${target.user} -d postgres -At -c ` +
+      shellQuote("select extname from pg_extension"),
+  );
+  const nowInstalled =
+    verifyRes.code === 0 ? new Set(parseTableList(verifyRes.stdout)) : installed;
+  const created = creatable.filter(([name]) => nowInstalled.has(name));
+  const failed = creatable.filter(([name]) => !nowInstalled.has(name));
+  if (created.length > 0) {
+    emit(
+      "info",
+      `installed ${created.map(([n, s]) => `${n} (schema ${s})`).join(", ")} to match the source`,
+    );
+  }
+  if (failed.length > 0) {
+    emit(
+      "err",
+      `could not install ${failed.map(([n]) => n).join(", ")} — objects depending on them ` +
+        "will not restore. See the psql output above.",
+    );
+  }
+}
+
+/** The `schema.table` names the SOURCE holds in `schemas` — the yardstick for a complete sync. */
+async function listSourceTables(
+  conn: SshConnection,
+  ctx: { compose: string; srcEnv: string; connInfo: string },
+  schemas: readonly string[],
+  emit: EmitFn,
+): Promise<string[] | null> {
+  const list = schemas.map(sqlLiteral).join(", ");
+  const res = await exec(
+    conn,
+    `${ctx.compose} exec -T ${ctx.srcEnv} db psql ${shellQuote(ctx.connInfo)} -At -c ` +
+      shellQuote(TABLE_LIST_SQL(list)),
+    { timeoutMs: CONNECT_TIMEOUT_MS },
+  );
+  if (res.code !== 0) {
+    emit("info", `could not list the source's tables to verify the sync: ${res.stderr.trim()}`);
+    return null;
+  }
+  return parseTableList(res.stdout);
+}
+
 /** Stream a remote command's stdout into the job log, line by line. */
 function lineStreamer(emit: EmitFn): (chunk: string) => void {
   let buffer = "";
@@ -552,6 +709,13 @@ async function runSync(
   let restoreCompleted = false;
   /** Schemas the main pass was asked to load — verified afterwards. */
   let restoredSchemas: string[] = ["public"];
+  /**
+   * Tables the SOURCE has that did NOT arrive. Non-empty means a partial
+   * restore: the data that landed is real and usable, but objects are
+   * missing, so the job must report failure even though the instance stays
+   * healthy enough to sync again once the cause is fixed.
+   */
+  let missingTables: string[] = [];
 
   try {
     const safeDir = assertSafeRemotePath(row.remotePath, row.composeProjectName, "SYNC INTO");
@@ -672,6 +836,11 @@ async function runSync(
 
       // ── restore: identity → storage metadata → main (see the module doc) ─
       await runPhase(phaseOpts, "restore", async () => {
+        // Before anything is written: the dump can reference types this
+        // instance does not have yet, and every object using one would fail.
+        // Additive and safe, so it runs while the data is still untouched.
+        await replicateSourceExtensions(conn, probeCtx, target, emit);
+
         dataTouched = true;
         if (authTables.length > 0) {
           await truncateThenLoad(conn, target, authTables, authDump, "identity data", emit);
@@ -686,7 +855,7 @@ async function runSync(
             emit,
           );
         }
-        const mainCode = await loadDumpIntoTarget(
+        const main = await loadDumpIntoTarget(
           conn,
           target,
           { containerPath: mainDump, snapshotPath, label: "schema + data" },
@@ -704,13 +873,30 @@ async function runSync(
         if (tables >= 0) {
           emit("info", `${tables} table(s) now in ${restoredSchemas.join(", ")}`);
         }
-        if (mainCode !== 0 && tables === 0) {
+        if (main.code !== 0 && tables === 0) {
           throw new Error(
             `pg_restore reported errors and no tables exist in ${restoredSchemas.join(", ")} — ` +
               "nothing was restored. Review the pg_restore output above; the most common " +
               `cause is the connecting role ('${target.user}') lacking rights on those ` +
               `schemas. This instance's previous data is in ${snapshotPath}.`,
           );
+        }
+
+        // "Some tables landed" is NOT the same as "the sync is complete".
+        // A dump referencing a type the target lacks fails only the objects
+        // that use it, so a handful of tables can go missing while dozens
+        // restore perfectly — which used to be reported as success. Having
+        // the live source in hand, the only honest check is to diff it
+        // against what actually arrived.
+        if (main.failedStatements > 0) {
+          const [sourceTables, targetTables] = await Promise.all([
+            listSourceTables(conn, probeCtx, restoredSchemas, emit),
+            listTables(conn, target, restoredSchemas, emit),
+          ]);
+          if (sourceTables && targetTables) {
+            const arrived = new Set(targetTables);
+            missingTables = sourceTables.filter((t) => !arrived.has(t));
+          }
         }
         // The data now comes from another cluster, whose roles had different
         // credentials. Put this instance's own back, or its containers
@@ -773,7 +959,52 @@ async function runSync(
       });
     });
 
+    // The instance is left RUNNING either way: whatever did arrive is real,
+    // and `error` is terminal — startSync refuses anything but a running
+    // instance, so failing the row here would lock the operator out of the
+    // very re-sync that fixes the problem. The JOB is what reports failure.
     await prisma.dbInstance.update({ where: { id: row.id }, data: { status: "running" } });
+
+    if (missingTables.length > 0) {
+      const shown = missingTables.slice(0, 20).join(", ");
+      const more =
+        missingTables.length > 20 ? ` (+${missingTables.length - 20} more)` : "";
+      emit(
+        "err",
+        `${missingTables.length} table(s) in the source did not arrive: ${shown}${more}`,
+      );
+      emit(
+        "info",
+        "the data that DID restore is intact and this instance stays running, so you can " +
+          "fix the cause and sync again. The usual cause is an extension the source has " +
+          "and this image does not (see the errors above) — every object using its types " +
+          `fails while the rest restore normally. Previous data: ${snapshotPath}.`,
+      );
+      const partialSummary =
+        `partial sync — ${missingTables.length} table(s) missing: ${shown}${more}`;
+      await recordSyncOutcome(row.id, "error", partialSummary);
+      await audit({
+        userId: ctx.userId,
+        userEmail: ctx.userEmail,
+        action: "instance.sync.failed",
+        targetType: "db_instance",
+        targetId: row.id,
+        metadata: {
+          project: row.composeProjectName,
+          server: row.serverId,
+          source: describeSource(source),
+          error: partialSummary,
+          missingTables,
+          snapshotPath,
+        },
+      }).catch((auditErr: unknown) => {
+        console.error("[sync] failed to write partial-sync audit row:", auditErr);
+      });
+      await persistLogTail(row.id, tail);
+      endJob(jobId, "error");
+      return;
+    }
+
     await recordSyncOutcome(row.id, "ok", summary || "sync completed");
     await audit({
       userId: ctx.userId,

@@ -210,6 +210,12 @@ async function runRestore(
   const compose = `docker compose -p ${row.composeProjectName}`;
   const ts = Date.now();
   let snapshotPath = "";
+  /**
+   * How many statements the load reported failing. Non-zero means objects in
+   * the dump were not created, so the job must report failure even though the
+   * data that did land is real and the instance stays usable.
+   */
+  let failedStatements = 0;
 
   try {
     const safeDir = assertSafeRemotePath(
@@ -289,7 +295,7 @@ async function runRestore(
         // doc on loadDumpIntoTarget for why that is the right call here. The
         // countTables check right after is what catches the case where that
         // tolerance would otherwise hide a restore that created NOTHING.
-        const restoreCode = await loadDumpIntoTarget(
+        const load = await loadDumpIntoTarget(
           conn,
           target,
           {
@@ -305,7 +311,7 @@ async function runRestore(
         if (tables >= 0) {
           emit("info", `${tables} table(s) now in ${restoredSchemas.join(", ")}`);
         }
-        if (restoreCode !== 0 && tables === 0) {
+        if (load.code !== 0 && tables === 0) {
           throw new Error(
             `${isSql ? "psql" : "pg_restore"} reported errors and no tables exist in ` +
               `${restoredSchemas.join(", ")} — nothing was restored. Review the output above; ` +
@@ -314,6 +320,14 @@ async function runRestore(
               `previous data is in ${snapshotPath}.`,
           );
         }
+
+        // Some tables landing is not the same as the dump having restored.
+        // A type this instance lacks (pgvector and friends) fails only the
+        // objects that use it, so a few tables can be missing while dozens
+        // arrive intact — reported as success until now. Unlike sync.ts
+        // there is no live source to diff against here, so the tool's own
+        // count of failed statements is the honest signal.
+        failedStatements = load.failedStatements;
 
         // An uploaded dump comes from another cluster too, so it carries the
         // same risk as a live sync: put this instance's own role passwords
@@ -352,7 +366,47 @@ async function runRestore(
       });
     });
 
+    // Left RUNNING either way: whatever did load is real, and `error` is
+    // terminal — startRestore refuses anything but a running instance, so
+    // failing the row would lock the operator out of the retry that fixes it.
+    // The JOB is what reports failure.
     await prisma.dbInstance.update({ where: { id: row.id }, data: { status: "running" } });
+
+    if (failedStatements > 0) {
+      emit(
+        "err",
+        `${failedStatements} statement(s) in the dump failed — objects it contained were ` +
+          "NOT created, so this restore is incomplete.",
+      );
+      emit(
+        "info",
+        "what did load is intact and this instance stays running, so you can fix the cause " +
+          "and restore again. The usual cause is a type from an extension this instance " +
+          "does not have (pgvector and similar): every object using it fails while the rest " +
+          `restore normally. Install it and retry. Previous data: ${snapshotPath}.`,
+      );
+      await audit({
+        userId: ctx.userId,
+        userEmail: ctx.userEmail,
+        action: "instance.restore.failed",
+        targetType: "db_instance",
+        targetId: row.id,
+        metadata: {
+          project: row.composeProjectName,
+          server: row.serverId,
+          sourceFilename: row.sourceFilename,
+          error: `partial restore — ${failedStatements} failed statement(s)`,
+          failedStatements,
+          snapshotPath,
+        },
+      }).catch((auditErr: unknown) => {
+        console.error("[restore] failed to write partial-restore audit row:", auditErr);
+      });
+      await persistLogTail(row.id, tail);
+      endJob(jobId, "error");
+      return;
+    }
+
     await audit({
       userId: ctx.userId,
       userEmail: ctx.userEmail,

@@ -7,7 +7,12 @@ vi.mock("@/lib/ssh", () => ({
   sftpWrite: (...a: unknown[]) => sftpWriteMock(...a),
 }));
 
-import { looksLikeCustomFormatDump, reassertSchemaPrivileges } from "./restore-core";
+import {
+  countFailedStatements,
+  looksLikeCustomFormatDump,
+  parseTableList,
+  reassertSchemaPrivileges,
+} from "./restore-core";
 
 const ok = (stdout = "") => ({ code: 0, stdout, stderr: "" });
 const fail = (stderr = "boom") => ({ code: 1, stdout: "", stderr });
@@ -29,6 +34,53 @@ describe("looksLikeCustomFormatDump", () => {
 
   it("is false when the magic appears anywhere but the start", () => {
     expect(looksLikeCustomFormatDump(Buffer.from("xPGDMP"))).toBe(false);
+  });
+});
+
+describe("countFailedStatements", () => {
+  // The distinction that matters: a non-zero exit code alone cannot tell
+  // "harmless ownership noise" from "objects were not created".
+  it("reads pg_restore's own ignored-error summary", () => {
+    const out =
+      "pg_restore: error: could not execute query: ERROR:  type extensions.vector does not exist\n" +
+      "pg_restore: warning: errors ignored on restore: 4";
+    expect(countFailedStatements(out, false)).toBe(4);
+  });
+
+  it("is 0 when pg_restore reported no failures at all", () => {
+    expect(countFailedStatements("pg_restore: connecting to database\n", false)).toBe(0);
+  });
+
+  // The pre-existing test fixture's wording — a warning line with no count.
+  it("is 0 for a warning that carries no number", () => {
+    expect(countFailedStatements("WARNING: errors ignored on restore", false)).toBe(0);
+  });
+
+  it("falls back to counting error lines when there is no summary", () => {
+    const out = "pg_restore: error: one\npg_restore: error: two\n";
+    expect(countFailedStatements(out, false)).toBe(2);
+  });
+
+  it("counts psql's ERROR lines, which have no summary line", () => {
+    const out =
+      'psql:/tmp/d.sql:12: ERROR:  type "vector" does not exist\n' +
+      "ERROR:  relation \"x\" already exists\n" +
+      "NOTICE:  something harmless\n";
+    expect(countFailedStatements(out, true)).toBe(2);
+  });
+
+  it("does not count the word ERROR inside ordinary output", () => {
+    expect(countFailedStatements("copying table ERROR_LOG\n", true)).toBe(0);
+  });
+});
+
+describe("parseTableList", () => {
+  it("returns one trimmed name per line, dropping blanks", () => {
+    expect(parseTableList("public.a\n public.b \n\n")).toEqual(["public.a", "public.b"]);
+  });
+
+  it("is empty for empty output", () => {
+    expect(parseTableList("\n  \n")).toEqual([]);
   });
 });
 

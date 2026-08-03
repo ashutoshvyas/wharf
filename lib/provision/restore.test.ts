@@ -298,8 +298,58 @@ describe("startRestore — happy path", () => {
     expect(res).toHaveProperty("jobId");
     const { status, lines } = await watchJob(restoreJobId("inst-1"));
     expect(status).toBe("ok");
-    expect(lines.some((l) => l.includes("commonly just cross-environment"))).toBe(true);
+    // pg_restore printed no parseable failure count, so this is the benign
+    // ownership/role case and stays a success.
+    expect(lines.some((l) => l.includes("no statement actually failed"))).toBe(true);
     expect(lines.some((l) => l.includes("12 table(s) now in public"))).toBe(true);
+  });
+
+  // The field bug: a dump referencing a type the instance lacks (pgvector)
+  // fails only the objects that use it, so a few tables go missing while
+  // dozens restore intact — which used to be reported as a clean success.
+  it("fails the job when statements failed, even though tables did land", async () => {
+    execMock.mockImplementation((_c: unknown, cmd: string) => {
+      if (cmd.includes("pg_restore")) {
+        return Promise.resolve({
+          code: 1,
+          stdout: "",
+          stderr:
+            'pg_restore: error: could not execute query: ERROR:  type extensions.vector does not exist\n' +
+            "pg_restore: warning: errors ignored on restore: 3",
+        });
+      }
+      if (cmd.includes("pg_tables") && cmd.includes("count(*)")) return Promise.resolve(ok("56"));
+      return Promise.resolve(ok());
+    });
+
+    await startRestore("inst-1", CTX, "clienta-prod", {
+      buffer: customFormatDump(),
+      filename: "mydump.backup",
+    });
+    const { status, lines } = await watchJob(restoreJobId("inst-1"));
+    const log = lines.join("\n");
+
+    expect(status).toBe("error");
+    expect(log).toContain("3 statement(s) in the dump failed");
+    expect(log).toContain("restore is incomplete");
+    // The instance stays RUNNING — `error` is terminal and startRestore
+    // refuses a non-running instance, which would block the retry that fixes
+    // it. (The final update is persistLogTail's, hence not `LastCalledWith`.)
+    expect(instanceUpdate).toHaveBeenCalledWith({
+      where: { id: "inst-1" },
+      data: { status: "running" },
+    });
+    expect(
+      instanceUpdate.mock.calls.some(
+        (c) => (c[0] as { data?: { status?: string } }).data?.status === "error",
+      ),
+    ).toBe(false);
+    expect(auditMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "instance.restore.failed",
+        metadata: expect.objectContaining({ failedStatements: 3 }),
+      }),
+    );
   });
 
   it("detects a plain-text SQL dump uploaded with a misleading .backup extension", async () => {

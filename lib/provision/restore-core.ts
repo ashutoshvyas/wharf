@@ -300,13 +300,56 @@ export async function reassertInstanceRoles(
 export const DATA_ACCESS_ROLES = ["postgres", "anon", "authenticated", "service_role"] as const;
 
 /** A SQL string literal, single-quote-escaped — for embedding a schema name as a `format()` argument. */
-function sqlLiteral(s: string): string {
+export function sqlLiteral(s: string): string {
   return `'${s.replace(/'/g, "''")}'`;
 }
 
 /** A SQL (possibly-)quoted identifier — for embedding a schema name where Postgres expects a name, not a string. */
-function sqlIdent(s: string): string {
+export function sqlIdent(s: string): string {
   return `"${s.replace(/"/g, '""')}"`;
+}
+
+/**
+ * The `schema.table` names present in `schemas`, or null when the list could
+ * not be taken (never a reason to fail a restore on its own).
+ *
+ * Used to prove a load actually created what it was supposed to: sync.ts
+ * takes this from the SOURCE and the TARGET and diffs them, which is the only
+ * way to catch objects a tolerated non-zero exit quietly dropped.
+ */
+export async function listTables(
+  conn: SshConnection,
+  target: TargetContainer,
+  schemas: readonly string[],
+  emit: EmitFn,
+): Promise<string[] | null> {
+  const list = schemas.map(sqlLiteral).join(", ");
+  const res = await exec(
+    conn,
+    `${target.compose} exec -T db psql -U ${target.user} -d postgres -At -c ` +
+      shellQuote(TABLE_LIST_SQL(list)),
+  );
+  if (res.code !== 0) {
+    emit("info", `could not list restored tables: ${res.stderr.trim()}`);
+    return null;
+  }
+  return parseTableList(res.stdout);
+}
+
+/** One `schema.table` per line, ordered so two listings are directly comparable. */
+export function TABLE_LIST_SQL(schemaList: string): string {
+  return (
+    `select schemaname || '.' || tablename from pg_tables ` +
+    `where schemaname in (${schemaList}) order by 1`
+  );
+}
+
+/** Split the output of {@link TABLE_LIST_SQL} into names. */
+export function parseTableList(stdout: string): string[] {
+  return stdout
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
 }
 
 /**
@@ -476,6 +519,31 @@ export interface LoadDumpOptions {
   snapshotPath?: string;
 }
 
+export interface LoadDumpResult {
+  /** Exit code (null when the channel closed without one). */
+  code: number | null;
+  /**
+   * How many statements the tool reported failing.
+   *
+   * pg_restore ends a tolerant run with `errors ignored on restore: N`; psql
+   * has no such summary, so its `ERROR:` lines are counted instead. Either
+   * way a non-zero value means objects in the dump did NOT get created —
+   * which a non-zero exit code alone cannot distinguish from harmless
+   * ownership noise. Callers use it to tell a partial restore from a clean
+   * one.
+   */
+  failedStatements: number;
+}
+
+/** `errors ignored on restore: N` (pg_restore) or the count of `ERROR:` lines (psql). */
+export function countFailedStatements(output: string, isSql: boolean): number {
+  if (isSql) return (output.match(/^\s*(?:psql:[^\s]*\s*)?ERROR:/gim) ?? []).length;
+  const summary = /errors ignored on restore:\s*(\d+)/i.exec(output);
+  if (summary) return Number.parseInt(summary[1]!, 10);
+  // Fallback for a run where pg_restore printed errors but no summary line.
+  return (output.match(/^pg_restore:\s*error:/gim) ?? []).length;
+}
+
 /**
  * Load one dump file into the target database, replacing what is there.
  *
@@ -490,15 +558,15 @@ export interface LoadDumpOptions {
  * recoverable — surface the warning clearly and let the operator judge from
  * the actual output, rather than guessing here.
  *
- * Returns the exit code (null when the channel closed without one) so a
- * caller can summarize a multi-pass load.
+ * Returns the exit code plus how many statements actually failed, so a caller
+ * can tell a tolerable run from one that silently dropped objects.
  */
 export async function loadDumpIntoTarget(
   conn: SshConnection,
   target: TargetContainer,
   opts: LoadDumpOptions,
   emit: EmitFn,
-): Promise<number | null> {
+): Promise<LoadDumpResult> {
   const flags = opts.flags ?? FULL_RESTORE_FLAGS;
   const cmd = opts.isSql
     ? `psql -U ${target.user} -d postgres -f ${opts.containerPath}`
@@ -507,20 +575,28 @@ export async function loadDumpIntoTarget(
   const res = await exec(conn, `${target.compose} exec -T ${target.pgEnv} db ${cmd}`, {
     timeoutMs: RESTORE_TIMEOUT_MS,
   });
-  emitCapturedOutput(emit, `${res.stdout}\n${res.stderr}`);
+  const output = `${res.stdout}\n${res.stderr}`;
+  emitCapturedOutput(emit, output);
+  const failedStatements = countFailedStatements(output, !!opts.isSql);
 
   if (res.code !== 0) {
     const tool = opts.isSql ? "psql" : "pg_restore";
     const what = opts.label ? `${tool} (${opts.label})` : tool;
     emit(
       "info",
-      `${what} exited with code ${res.code} — this is commonly just cross-environment ` +
-        "ownership/role warnings, not a failed restore. Review the output above." +
+      `${what} exited with code ${res.code}` +
+        (failedStatements > 0
+          ? ` and reported ${failedStatements} failed statement(s) — objects in the dump ` +
+            "were NOT created. Ownership/role warnings alone would not do this; the usual " +
+            "cause is a type or function from an extension the target does not have."
+          : " — no statement actually failed, so this is just cross-environment " +
+            "ownership/role noise.") +
+        " Review the output above." +
         (opts.snapshotPath
           ? ` The pre-restore snapshot at ${opts.snapshotPath} can be used to revert if ` +
             "the data doesn't look right."
           : ""),
     );
   }
-  return res.code;
+  return { code: res.code, failedStatements };
 }

@@ -598,6 +598,166 @@ describe("startSync — happy path", () => {
     expect(lines.join("\n")).toContain("re-asserted ownership and privileges");
   });
 
+  // pg_dump --schema does NOT emit CREATE EXTENSION (extensions live outside
+  // the dumped schema), so a source using pgvector produced a dump full of
+  // `extensions.vector` columns with nothing defining that type — every
+  // object using it failed while the rest restored perfectly.
+  it("installs the source's extensions on the target, into the same schema", async () => {
+    const calls: string[] = [];
+    execMock.mockImplementation((_c: unknown, cmd: string) => {
+      calls.push(cmd);
+      if (cmd.includes("join pg_namespace n on n.oid = e.extnamespace")) {
+        return Promise.resolve(ok("pgcrypto\textensions\nvector\textensions\n"));
+      }
+      if (cmd.includes("select name from pg_available_extensions")) {
+        return Promise.resolve(ok("pgcrypto\nvector\npostgis\n"));
+      }
+      if (cmd.includes("select extname from pg_extension")) {
+        // Already installed BEFORE the create; the verify pass re-runs this
+        // same query, by which point vector exists.
+        return Promise.resolve(
+          calls.filter((c) => c.includes("select extname from pg_extension")).length > 1
+            ? ok("pgcrypto\nvector\n")
+            : ok("pgcrypto\n"),
+        );
+      }
+      if (cmd.includes("pg_tables")) return Promise.resolve(ok(""));
+      return Promise.resolve(ok());
+    });
+
+    await startSync("inst-1", CTX, "clienta-prod");
+    const { status, lines } = await watchJob(syncJobId("inst-1"));
+    expect(status).toBe("ok");
+
+    const createCmd = calls.find((c) => c.includes("CREATE EXTENSION"))!;
+    expect(createCmd).toBeDefined();
+    // Same schema as the source — the dump names the type `extensions.vector`,
+    // so an extension installed anywhere else does not satisfy it.
+    expect(createCmd).toContain('CREATE EXTENSION IF NOT EXISTS "vector" WITH SCHEMA "extensions"');
+    expect(createCmd).toContain('CREATE SCHEMA IF NOT EXISTS "extensions"');
+    // Already-installed ones are left alone.
+    expect(createCmd).not.toContain('"pgcrypto"');
+    expect(lines.join("\n")).toContain("installed vector (schema extensions)");
+
+    // And it runs BEFORE the data is loaded, or the load would still fail.
+    const extAt = calls.findIndex((c) => c.includes("CREATE EXTENSION"));
+    const loadAt = calls.findIndex((c) => c.includes("--clean --if-exists"));
+    expect(extAt).toBeGreaterThanOrEqual(0);
+    expect(extAt).toBeLessThan(loadAt);
+  });
+
+  it("reports an extension the image cannot provide instead of failing the sync", async () => {
+    execMock.mockImplementation((_c: unknown, cmd: string) => {
+      if (cmd.includes("join pg_namespace n on n.oid = e.extnamespace")) {
+        return Promise.resolve(ok("postgis\textensions\n"));
+      }
+      if (cmd.includes("select name from pg_available_extensions")) {
+        return Promise.resolve(ok("pgcrypto\nvector\n"));
+      }
+      if (cmd.includes("select extname from pg_extension")) return Promise.resolve(ok("pgcrypto\n"));
+      if (cmd.includes("pg_tables")) return Promise.resolve(ok(""));
+      return Promise.resolve(ok());
+    });
+
+    await startSync("inst-1", CTX, "clienta-prod");
+    const { status, lines } = await watchJob(syncJobId("inst-1"));
+
+    expect(status).toBe("ok");
+    expect(lines.join("\n")).toContain("does not provide postgis");
+  });
+
+  // The exact field failure: 3 of 59 tables missing (the ones with embedding
+  // columns), everything else perfect, and the sync reported success.
+  it("fails the job when tables in the source did not arrive, naming them", async () => {
+    execMock.mockImplementation((_c: unknown, cmd: string) => {
+      if (cmd.includes("join pg_namespace n on n.oid = e.extnamespace")) {
+        return Promise.resolve(ok(""));
+      }
+      if (cmd.includes("pg_restore")) {
+        return Promise.resolve({
+          code: 1,
+          stdout: "",
+          stderr: "pg_restore: warning: errors ignored on restore: 4",
+        });
+      }
+      if (cmd.includes("count(*) from pg_tables")) return Promise.resolve(ok("2"));
+      // The source/target table listings the diff is built from.
+      // Anchored on a quote-free fragment: shellQuote rewrites every ' in the
+      // SQL, so matching on `|| '.' ||` would never fire.
+      if (cmd.includes("tablename from pg_tables")) {
+        const isSource = cmd.includes("postgresql://");
+        return Promise.resolve(
+          ok(
+            isSource
+              ? "public.chapters\npublic.shlokas\npublic.knowledge_chunks\n"
+              : "public.chapters\n",
+          ),
+        );
+      }
+      if (cmd.includes("pg_tables")) return Promise.resolve(ok(""));
+      return Promise.resolve(ok());
+    });
+
+    await startSync("inst-1", CTX, "clienta-prod");
+    const { status, lines } = await watchJob(syncJobId("inst-1"));
+    const log = lines.join("\n");
+
+    expect(status).toBe("error");
+    expect(log).toContain("2 table(s) in the source did not arrive");
+    expect(log).toContain("public.shlokas");
+    expect(log).toContain("public.knowledge_chunks");
+    // Instance stays RUNNING so the operator can re-sync after fixing it.
+    // (The final update is persistLogTail's, hence not `LastCalledWith`.)
+    expect(instanceUpdate).toHaveBeenCalledWith({
+      where: { id: "inst-1" },
+      data: { status: "running" },
+    });
+    expect(
+      instanceUpdate.mock.calls.some(
+        (c) => (c[0] as { data?: { status?: string } }).data?.status === "error",
+      ),
+    ).toBe(false);
+    expect(
+      auditMock.mock.calls.some(
+        (c) =>
+          (c[0] as { action: string }).action === "instance.sync.failed" &&
+          ((c[0] as { metadata?: { missingTables?: string[] } }).metadata?.missingTables ?? [])
+            .includes("public.shlokas"),
+      ),
+    ).toBe(true);
+    expect(syncSourceUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ lastSyncStatus: "error" }),
+      }),
+    );
+  });
+
+  it("does not run the missing-table diff when nothing failed", async () => {
+    const calls: string[] = [];
+    execMock.mockImplementation((_c: unknown, cmd: string) => {
+      calls.push(cmd);
+      if (cmd.includes("join pg_namespace n on n.oid = e.extnamespace")) {
+        return Promise.resolve(ok(""));
+      }
+      if (cmd.includes("pg_tables")) return Promise.resolve(ok(""));
+      return Promise.resolve(ok());
+    });
+
+    await startSync("inst-1", CTX, "clienta-prod");
+    const { status } = await watchJob(syncJobId("inst-1"));
+
+    expect(status).toBe("ok");
+    // A clean load needs no verification round trip. Checked on the TARGET
+    // listing specifically — the identity probe (existingSourceTables) issues
+    // a similar query against the SOURCE on every sync, so the bare SQL shape
+    // is not evidence either way.
+    expect(
+      calls.some(
+        (c) => c.includes("tablename from pg_tables") && !c.includes("postgresql://"),
+      ),
+    ).toBe(false);
+  });
+
   // The data is already loaded and correct by this point — a credential
   // problem must not throw away a good restore or strand the instance.
   it("keeps the sync successful when the role re-assert is refused", async () => {
