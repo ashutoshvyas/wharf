@@ -405,6 +405,19 @@ describe("renderInstanceCompose — env file", () => {
     expect(envFile).not.toContain("http://localhost");
   });
 
+  // PostgREST overrides the database's own search_path, and an OPERATOR can
+  // only be resolved through it — unlike a type or function, it cannot be
+  // schema-qualified by name. Dropping `extensions` here breaks every RPC
+  // using a bare extension operator (`operator does not exist:
+  // extensions.vector <=> extensions.vector`) while the same query keeps
+  // working over a direct/pooler connection, which makes it a genuinely
+  // confusing outage to diagnose. Upstream ships `public` alone.
+  it("keeps `extensions` on PostgREST's search path", async () => {
+    const { envFile } = await renderDoc();
+    const value = envValue(envFile, "PGRST_DB_EXTRA_SEARCH_PATH") ?? "";
+    expect(value.split(",").map((s) => s.trim())).toContain("extensions");
+  });
+
   it("sets sensible Studio defaults", async () => {
     const { envFile } = await renderDoc();
     expect(envValue(envFile, "STUDIO_DEFAULT_ORGANIZATION")).toBe("WHARF");
