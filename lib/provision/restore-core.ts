@@ -296,6 +296,132 @@ export async function reassertInstanceRoles(
   }
 }
 
+/** Roles PostgREST/Studio/an app connect through — every restored schema must stay usable by all four. */
+export const DATA_ACCESS_ROLES = ["postgres", "anon", "authenticated", "service_role"] as const;
+
+/** A SQL string literal, single-quote-escaped — for embedding a schema name as a `format()` argument. */
+function sqlLiteral(s: string): string {
+  return `'${s.replace(/'/g, "''")}'`;
+}
+
+/** A SQL (possibly-)quoted identifier — for embedding a schema name where Postgres expects a name, not a string. */
+function sqlIdent(s: string): string {
+  return `"${s.replace(/"/g, '""')}"`;
+}
+
+/**
+ * Put every object now in `schemas` back under this instance's normal
+ * ownership and grants, after a full-schema load (restore/sync) replaced them.
+ *
+ * WHY THIS IS NEEDED: loadDumpIntoTarget necessarily connects as whichever
+ * role can DROP whatever was there before — `target.user`, resolved by
+ * {@link resolveAdminUser} to `supabase_admin` (the image's real superuser)
+ * whenever it exists. With `--no-owner`, pg_restore/psql then makes THAT
+ * connecting role the owner of every (re)created object — not `postgres`,
+ * the role a normal, never-restored instance actually owns its tables as
+ * (Studio's postgres-meta connects as `postgres`; see PG_META_DB_USER in
+ * templates/supabase/docker-compose.yml). The image's own default-privilege
+ * grants for `public` are scoped `FOR ROLE postgres` and only fire for
+ * objects a FUTURE `postgres`-run CREATE makes — they never apply
+ * retroactively, and never apply at all to something supabase_admin created.
+ * Left alone, PostgREST/Studio/GoTrue see a schema they hold no privileges
+ * on: every read and write fails, which looks exactly like "nothing was
+ * restored" even though the data landed correctly (the field report this
+ * fixes: source owner `supabase_admin`, instance's own owner `postgres`).
+ *
+ * NON-FATAL, same as reassertInstanceRoles: by the time this runs the data is
+ * already loaded and correct, so a failure here must not throw away a
+ * successful restore — it reports loudly instead.
+ */
+export async function reassertSchemaPrivileges(
+  conn: SshConnection,
+  target: TargetContainer,
+  schemas: readonly string[],
+  paths: { remotePath: string; containerPath: string },
+  emit: EmitFn,
+): Promise<void> {
+  if (schemas.length === 0) return;
+  const roles = DATA_ACCESS_ROLES.join(", ");
+  const statements: string[] = [];
+  for (const schema of schemas) {
+    const lit = sqlLiteral(schema);
+    const ident = sqlIdent(schema);
+    // ALTER ROUTINE (not ALTER FUNCTION) is the one form Postgres documents as
+    // working uniformly across plain functions, procedures AND aggregates, so
+    // this doesn't need to filter pg_proc by kind first.
+    statements.push(
+      `DO $$ DECLARE r record; BEGIN ` +
+        `FOR r IN SELECT tablename FROM pg_tables WHERE schemaname = ${lit} LOOP ` +
+        `EXECUTE format('ALTER TABLE %I.%I OWNER TO postgres', ${lit}, r.tablename); END LOOP; ` +
+        `FOR r IN SELECT sequencename FROM pg_sequences WHERE schemaname = ${lit} LOOP ` +
+        `EXECUTE format('ALTER SEQUENCE %I.%I OWNER TO postgres', ${lit}, r.sequencename); END LOOP; ` +
+        `FOR r IN SELECT viewname FROM pg_views WHERE schemaname = ${lit} LOOP ` +
+        `EXECUTE format('ALTER VIEW %I.%I OWNER TO postgres', ${lit}, r.viewname); END LOOP; ` +
+        `FOR r IN SELECT matviewname FROM pg_matviews WHERE schemaname = ${lit} LOOP ` +
+        `EXECUTE format('ALTER MATERIALIZED VIEW %I.%I OWNER TO postgres', ${lit}, r.matviewname); END LOOP; ` +
+        `FOR r IN SELECT p.oid::regprocedure::text AS sig FROM pg_proc p ` +
+        `JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = ${lit} LOOP ` +
+        `EXECUTE format('ALTER ROUTINE %s OWNER TO postgres', r.sig); END LOOP; ` +
+        `END $$;`,
+    );
+    statements.push(`GRANT USAGE ON SCHEMA ${ident} TO ${roles};`);
+    statements.push(`GRANT ALL ON ALL TABLES IN SCHEMA ${ident} TO ${roles};`);
+    statements.push(`GRANT ALL ON ALL SEQUENCES IN SCHEMA ${ident} TO ${roles};`);
+    statements.push(`GRANT ALL ON ALL ROUTINES IN SCHEMA ${ident} TO ${roles};`);
+    statements.push(
+      `ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA ${ident} GRANT ALL ON TABLES TO ${roles};`,
+    );
+    statements.push(
+      `ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA ${ident} GRANT ALL ON SEQUENCES TO ${roles};`,
+    );
+    statements.push(
+      `ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA ${ident} GRANT ALL ON ROUTINES TO ${roles};`,
+    );
+  }
+  const sql = `${statements.join("\n")}\n`;
+
+  try {
+    await sftpWrite(conn, paths.remotePath, sql, 0o600);
+    const cpRes = await exec(
+      conn,
+      `${target.compose} cp ${paths.remotePath} db:${paths.containerPath}`,
+    );
+    if (cpRes.code !== 0) {
+      emit(
+        "info",
+        `docker compose cp (schema privilege re-assert) failed (code ${cpRes.code}): ` +
+          `${cpRes.stderr.trim()} — repair by hand: re-run this restore/sync, or GRANT/ALTER ` +
+          `DEFAULT PRIVILEGES on ${schemas.join(", ")} to postgres/anon/authenticated/service_role yourself.`,
+      );
+      return;
+    }
+    const applyRes = await exec(
+      conn,
+      `${target.compose} exec -T db psql -U ${target.user} -d postgres -v ON_ERROR_STOP=1 ` +
+        `-f ${paths.containerPath}`,
+    );
+    if (applyRes.code !== 0) {
+      emit(
+        "info",
+        `could not re-assert ownership/privileges on ${schemas.join(", ")} ` +
+          `(code ${applyRes.code}): ${applyRes.stderr.trim()} — the DATA restored fine, but ` +
+          `PostgREST/Studio may not be able to read or write it until this is fixed by hand.`,
+      );
+      return;
+    }
+    emit(
+      "info",
+      `re-asserted ownership and privileges for ${DATA_ACCESS_ROLES.join(", ")} on ` +
+        schemas.join(", "),
+    );
+  } finally {
+    await exec(conn, `${target.compose} exec -T db rm -f ${paths.containerPath}`).catch(
+      () => {},
+    );
+    await exec(conn, `rm -f ${shellQuote(paths.remotePath)}`).catch(() => {});
+  }
+}
+
 /**
  * How many tables the target holds in `schemas`, for verifying a load actually
  * landed. Returns -1 when the count could not be taken (never a reason to fail

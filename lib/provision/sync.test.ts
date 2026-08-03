@@ -557,6 +557,47 @@ describe("startSync — happy path", () => {
     expect(lines.join("\n")).toContain("re-asserted this instance's credentials");
   });
 
+  // The field bug this fixes: a live source's tables land owned by whichever
+  // role connected to load them (supabase_admin), not this instance's own
+  // `postgres` — so PostgREST/Studio hold no privileges on them at all.
+  it("re-asserts ownership and privileges on every restored schema, including extras", async () => {
+    const calls: string[] = [];
+    instanceFindFirst.mockResolvedValue({
+      ...ROW,
+      syncSource: { ...SOURCE, extraSchemas: ["billing"] },
+    });
+    execMock.mockImplementation((_c: unknown, cmd: string) => {
+      calls.push(cmd);
+      if (cmd.includes("pg_tables") && cmd.includes("count(*)")) return Promise.resolve(ok("3"));
+      if (cmd.includes("pg_tables")) return Promise.resolve(ok(""));
+      return Promise.resolve(ok());
+    });
+
+    await startSync("inst-1", CTX, "clienta-prod");
+    const { lines } = await watchJob(syncJobId("inst-1"));
+
+    const write = sftpWriteMock.mock.calls.find((w) =>
+      String(w[1]).includes("privileges-"),
+    ) as [unknown, string, string, number];
+    expect(write).toBeDefined();
+    expect(write[2]).toContain("schemaname = 'public'");
+    expect(write[2]).toContain("schemaname = 'billing'");
+    expect(write[2]).toContain(
+      'GRANT ALL ON ALL TABLES IN SCHEMA "public" TO postgres, anon, authenticated, service_role;',
+    );
+    expect(write[3]).toBe(0o600);
+
+    const applyCmd = calls.find((c) => c.includes("-f /tmp/wharf-privileges-"))!;
+    expect(applyCmd).toContain("-U postgres");
+
+    // After the data load, same as the role re-assert.
+    const mainAt = calls.findIndex((c) => c.includes("--clean --if-exists"));
+    const privAt = calls.findIndex((c) => c.includes("wharf-privileges-"));
+    expect(mainAt).toBeGreaterThanOrEqual(0);
+    expect(mainAt).toBeLessThan(privAt);
+    expect(lines.join("\n")).toContain("re-asserted ownership and privileges");
+  });
+
   // The data is already loaded and correct by this point — a credential
   // problem must not throw away a good restore or strand the instance.
   it("keeps the sync successful when the role re-assert is refused", async () => {
@@ -605,7 +646,13 @@ describe("startSync — happy path", () => {
     await startSync("inst-1", CTX, "clienta-prod");
     const { lines } = await watchJob(syncJobId("inst-1"));
     expect(lines.join("\n")).toContain("storage object copying is off");
-    expect(sftpWriteMock).not.toHaveBeenCalled();
+    // No manifest/env file for a storage copy that never ran (the restore
+    // phase's own schema-privilege re-assert script is expected here).
+    expect(
+      sftpWriteMock.mock.calls.some(
+        (w) => String(w[1]).includes("sync-manifest-") || String(w[1]).includes("sync-env-"),
+      ),
+    ).toBe(false);
   });
 
   it("audits the sync with the source's identity but none of its secrets", async () => {

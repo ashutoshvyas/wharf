@@ -213,8 +213,10 @@ describe("startRestore — happy path", () => {
       expect(lines.some((l) => l.includes(`✓ ${phase}`))).toBe(true);
     }
 
-    // sftpWrite carried the uploaded bytes, not the client filename.
-    expect(sftpWriteMock).toHaveBeenCalledTimes(1);
+    // sftpWrite carried the uploaded bytes, not the client filename — plus the
+    // post-load schema-privilege re-assert script (no WHARF-managed roles were
+    // found in this default mock, so reassertInstanceRoles itself wrote none).
+    expect(sftpWriteMock).toHaveBeenCalledTimes(2);
     const [, uploadPath, uploadedBuffer] = sftpWriteMock.mock.calls[0]!;
     expect(uploadPath).toMatch(/^\/opt\/db-instances\/sb_4f2a\/restore\/upload-\d+\.backup$/);
     expect((uploadedBuffer as Buffer).equals(uploadBuffer)).toBe(true);
@@ -353,6 +355,37 @@ describe("startRestore — happy path", () => {
         (c) => (c[0] as { data?: { status?: string } }).data?.status === "running",
       ),
     ).toBe(false);
+  });
+
+  // The field bug this fixes: an uploaded dump's tables land owned by
+  // whichever role connected to load them (supabase_admin), not this
+  // instance's own `postgres` — so PostgREST/Studio hold no privileges on
+  // them at all, even though the data itself restored correctly.
+  it("re-asserts ownership and privileges on public after loading the dump", async () => {
+    const calls: string[] = [];
+    execMock.mockImplementation((_c: unknown, cmd: string) => {
+      calls.push(cmd);
+      return Promise.resolve(ok());
+    });
+
+    await startRestore("inst-1", CTX, "clienta-prod", {
+      buffer: customFormatDump(),
+      filename: "mydump.backup",
+    });
+    const { lines } = await watchJob(restoreJobId("inst-1"));
+
+    const write = sftpWriteMock.mock.calls.find((w) =>
+      String(w[1]).includes("privileges-"),
+    ) as [unknown, string, string, number];
+    expect(write).toBeDefined();
+    expect(write[2]).toContain("schemaname = 'public'");
+    expect(write[3]).toBe(0o600);
+
+    const restoreAt = calls.findIndex((c) => c.includes("pg_restore"));
+    const privAt = calls.findIndex((c) => c.includes("wharf-privileges-"));
+    expect(restoreAt).toBeGreaterThanOrEqual(0);
+    expect(restoreAt).toBeLessThan(privAt);
+    expect(lines.join("\n")).toContain("re-asserted ownership and privileges");
   });
 
   it("fails the job when pg_dump (the safety snapshot) fails, before ever touching the restore", async () => {

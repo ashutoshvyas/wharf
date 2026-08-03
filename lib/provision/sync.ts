@@ -57,6 +57,7 @@ import {
   loadDumpIntoTarget,
   pgPasswordEnv,
   reassertInstanceRoles,
+  reassertSchemaPrivileges,
   resolveAdminUser,
   shellQuote,
   takeSafetySnapshot,
@@ -721,6 +722,20 @@ async function runSync(
           {
             remotePath: `${safeDir}/restore/roles-${ts}.sql`,
             containerPath: `/tmp/wharf-roles-${ts}.sql`,
+          },
+          emit,
+        );
+
+        // The source's own owner/grants came with it too (--no-owner made
+        // `target.user` the owner of everything it just (re)created) — put
+        // this instance's normal postgres-owned, PostgREST-usable state back.
+        await reassertSchemaPrivileges(
+          conn,
+          target,
+          restoredSchemas,
+          {
+            remotePath: `${safeDir}/restore/privileges-${ts}.sql`,
+            containerPath: `/tmp/wharf-privileges-${ts}.sql`,
           },
           emit,
         );

@@ -1,5 +1,16 @@
-import { describe, expect, it } from "vitest";
-import { looksLikeCustomFormatDump } from "./restore-core";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const execMock = vi.fn();
+const sftpWriteMock = vi.fn();
+vi.mock("@/lib/ssh", () => ({
+  exec: (...a: unknown[]) => execMock(...a),
+  sftpWrite: (...a: unknown[]) => sftpWriteMock(...a),
+}));
+
+import { looksLikeCustomFormatDump, reassertSchemaPrivileges } from "./restore-core";
+
+const ok = (stdout = "") => ({ code: 0, stdout, stderr: "" });
+const fail = (stderr = "boom") => ({ code: 1, stdout: "", stderr });
 
 describe("looksLikeCustomFormatDump", () => {
   it("is true for a buffer starting with the PGDMP magic", () => {
@@ -18,5 +29,98 @@ describe("looksLikeCustomFormatDump", () => {
 
   it("is false when the magic appears anywhere but the start", () => {
     expect(looksLikeCustomFormatDump(Buffer.from("xPGDMP"))).toBe(false);
+  });
+});
+
+describe("reassertSchemaPrivileges", () => {
+  const target = { compose: "docker compose -p sb_4f2a", pgEnv: "-e PGPASSWORD=x", user: "supabase_admin" };
+  const paths = { remotePath: "/opt/db-instances/sb_4f2a/restore/privileges-1.sql", containerPath: "/tmp/wharf-privileges-1.sql" };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    execMock.mockResolvedValue(ok());
+    sftpWriteMock.mockResolvedValue(undefined);
+  });
+
+  it("does nothing when no schemas were restored", async () => {
+    const emit = vi.fn();
+    await reassertSchemaPrivileges({} as never, target, [], paths, emit);
+    expect(sftpWriteMock).not.toHaveBeenCalled();
+    expect(execMock).not.toHaveBeenCalled();
+  });
+
+  it("re-owns tables/sequences/views/functions and re-grants the data-access roles", async () => {
+    const emit = vi.fn();
+    await reassertSchemaPrivileges({} as never, target, ["public"], paths, emit);
+
+    expect(sftpWriteMock).toHaveBeenCalledTimes(1);
+    const [, writtenPath, sql, mode] = sftpWriteMock.mock.calls[0]!;
+    expect(writtenPath).toBe(paths.remotePath);
+    expect(mode).toBe(0o600);
+
+    // Ownership is reassigned via dynamic SQL scoped to the restored schema.
+    expect(sql).toContain("pg_tables WHERE schemaname = 'public'");
+    expect(sql).toContain("ALTER TABLE %I.%I OWNER TO postgres");
+    expect(sql).toContain("ALTER SEQUENCE %I.%I OWNER TO postgres");
+    expect(sql).toContain("ALTER VIEW %I.%I OWNER TO postgres");
+    expect(sql).toContain("ALTER MATERIALIZED VIEW %I.%I OWNER TO postgres");
+    expect(sql).toContain("ALTER ROUTINE %s OWNER TO postgres");
+
+    // Existing objects are re-granted, and the rule is set up for future ones too.
+    expect(sql).toContain('GRANT ALL ON ALL TABLES IN SCHEMA "public" TO postgres, anon, authenticated, service_role;');
+    expect(sql).toContain('GRANT USAGE ON SCHEMA "public" TO postgres, anon, authenticated, service_role;');
+    expect(sql).toContain(
+      'ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA "public" GRANT ALL ON TABLES TO postgres, anon, authenticated, service_role;',
+    );
+
+    // Loaded into the container as the connecting (superuser) role, not postgres.
+    const applyCmd = execMock.mock.calls.find((c) => String(c[1]).includes("-f " + paths.containerPath))![1] as string;
+    expect(applyCmd).toContain("-U supabase_admin");
+
+    expect(emit).toHaveBeenCalledWith(
+      "info",
+      expect.stringContaining("re-asserted ownership and privileges"),
+    );
+  });
+
+  it("covers every schema passed in, not just the first", async () => {
+    const emit = vi.fn();
+    await reassertSchemaPrivileges({} as never, target, ["public", "billing"], paths, emit);
+    const [, , sql] = sftpWriteMock.mock.calls[0]!;
+    expect(sql).toContain('schemaname = \'public\'');
+    expect(sql).toContain('schemaname = \'billing\'');
+    expect(sql).toContain('SCHEMA "billing"');
+  });
+
+  it("safely quotes a schema name containing a double quote", async () => {
+    const emit = vi.fn();
+    await reassertSchemaPrivileges({} as never, target, ['weird"schema'], paths, emit);
+    const [, , sql] = sftpWriteMock.mock.calls[0]!;
+    expect(sql).toContain('"weird""schema"');
+  });
+
+  it("reports loudly, but does not throw, when applying the script fails", async () => {
+    execMock.mockImplementation((_c: unknown, cmd: string) => {
+      if (cmd.includes("-f " + paths.containerPath)) {
+        return Promise.resolve(fail('ERROR: permission denied'));
+      }
+      return Promise.resolve(ok());
+    });
+    const emit = vi.fn();
+    await expect(
+      reassertSchemaPrivileges({} as never, target, ["public"], paths, emit),
+    ).resolves.toBeUndefined();
+    expect(emit).toHaveBeenCalledWith(
+      "info",
+      expect.stringContaining("could not re-assert ownership/privileges"),
+    );
+  });
+
+  it("cleans up the temp SQL file from both the container and the host", async () => {
+    const emit = vi.fn();
+    await reassertSchemaPrivileges({} as never, target, ["public"], paths, emit);
+    const cmds = execMock.mock.calls.map((c) => c[1] as string);
+    expect(cmds.some((c) => c.includes(`rm -f ${paths.containerPath}`))).toBe(true);
+    expect(cmds.some((c) => c.includes(`rm -f`) && c.includes(paths.remotePath))).toBe(true);
   });
 });
