@@ -61,6 +61,9 @@ export function decryptAuthSettings(row: InstanceAuthSettings | null): AuthSetti
     azureEnabled: row.azureEnabled,
     azureClientId: row.azureClientId ?? DEFAULT_AUTH_SETTINGS.azureClientId,
     azureSecret: row.azureSecretEnc ? open(row.azureSecretEnc) : DEFAULT_AUTH_SETTINGS.azureSecret,
+    appleEnabled: row.appleEnabled,
+    appleClientId: row.appleClientId ?? DEFAULT_AUTH_SETTINGS.appleClientId,
+    appleSecret: row.appleSecretEnc ? open(row.appleSecretEnc) : DEFAULT_AUTH_SETTINGS.appleSecret,
   };
 }
 

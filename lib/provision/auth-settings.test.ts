@@ -99,6 +99,9 @@ describe("decryptAuthSettings", () => {
       azureEnabled: false,
       azureClientId: null,
       azureSecretEnc: null,
+      appleEnabled: true,
+      appleClientId: "com.example.app.web",
+      appleSecretEnc: Buffer.from("sealed"),
       createdAt: new Date(),
       updatedAt: new Date(),
     });
@@ -114,6 +117,11 @@ describe("decryptAuthSettings", () => {
     // Untouched provider fields fall back to defaults.
     expect(values.githubEnabled).toBe(false);
     expect(values.githubClientId).toBe(DEFAULT_AUTH_SETTINGS.githubClientId);
+    expect(values.azureClientId).toBe(DEFAULT_AUTH_SETTINGS.azureClientId);
+    // Apple decrypts the same way as the rest, Services ID and all.
+    expect(values.appleEnabled).toBe(true);
+    expect(values.appleClientId).toBe("com.example.app.web");
+    expect(values.appleSecret).toBe("decrypted-value");
   });
 });
 

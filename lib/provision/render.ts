@@ -161,6 +161,11 @@ export interface AuthSettingsValues {
   azureEnabled: boolean;
   azureClientId: string;
   azureSecret: string;
+  /** Apple: a Services ID (comma-separated list allowed), not a plain client id. */
+  appleEnabled: boolean;
+  appleClientId: string;
+  /** A developer-generated ES256 JWT Apple caps at 6 months, not a long-lived secret. */
+  appleSecret: string;
 }
 
 /** Exactly what .env.template hardcoded before unchanged behavior when unset. */
@@ -187,6 +192,9 @@ export const DEFAULT_AUTH_SETTINGS: AuthSettingsValues = {
   azureEnabled: false,
   azureClientId: "",
   azureSecret: "",
+  appleEnabled: false,
+  appleClientId: "",
+  appleSecret: "",
 };
 
 /** Plain shape of one instance's Analytics-buckets toggle. */
@@ -484,6 +492,9 @@ async function renderEnv(
     AZURE_ENABLED: bool(auth.azureEnabled),
     AZURE_CLIENT_ID: auth.azureClientId,
     AZURE_SECRET: auth.azureSecret,
+    APPLE_ENABLED: bool(auth.appleEnabled),
+    APPLE_CLIENT_ID: auth.appleClientId,
+    APPLE_SECRET: auth.appleSecret,
   });
 
   // per-flow email subject/template overrides. A flow with no entry

@@ -13,6 +13,7 @@ describe("authSettingsUpdateSchema", () => {
       googleSecret: "",
       githubSecret: "",
       azureSecret: "",
+      appleSecret: "",
     });
     expect(out).toEqual({ googleEnabled: true });
     expect("smtpPass" in out).toBe(false);
@@ -37,6 +38,7 @@ describe("authSettingsUpdateSchema", () => {
     "googleClientId",
     "githubClientId",
     "azureClientId",
+    "appleClientId",
   ])("rejects a line break in %s (.env injection guard)", (field) => {
     expect(
       authSettingsUpdateSchema.safeParse({ [field]: "line1\nEVIL=1" }).success,
@@ -44,6 +46,17 @@ describe("authSettingsUpdateSchema", () => {
     expect(
       authSettingsUpdateSchema.safeParse({ [field]: "line1\rEVIL=1" }).success,
     ).toBe(false);
+  });
+
+  // Apple's "secret" is an ES256 JWT the developer signs themselves, not a
+  // short opaque string — three base64url segments run well past the 1024
+  // every other provider's secret is capped at.
+  it("accepts an Apple client secret longer than the other providers' 1024 cap", () => {
+    const jwt = `${"a".repeat(400)}.${"b".repeat(900)}.${"c".repeat(300)}`;
+    expect(jwt.length).toBeGreaterThan(1024);
+    const out = authSettingsUpdateSchema.parse({ appleEnabled: true, appleSecret: jwt });
+    expect(out.appleSecret).toBe(jwt);
+    expect(authSettingsUpdateSchema.safeParse({ googleSecret: jwt }).success).toBe(false);
   });
 
   it("validates jwtExpirySeconds bounds", () => {

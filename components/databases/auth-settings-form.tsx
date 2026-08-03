@@ -129,6 +129,15 @@ function AzureIcon() {
   );
 }
 
+/** Apple's mark, drawn inline for the same reason as the others — identification only. */
+function AppleIcon() {
+  return (
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M17.05 12.54c-.03-2.7 2.2-4 2.3-4.06-1.25-1.83-3.2-2.08-3.9-2.11-1.66-.17-3.24.98-4.08.98-.84 0-2.14-.96-3.52-.93-1.81.03-3.48 1.05-4.41 2.67-1.88 3.26-.48 8.08 1.35 10.72.9 1.29 1.96 2.74 3.36 2.69 1.35-.06 1.86-.87 3.49-.87 1.63 0 2.09.87 3.51.84 1.45-.03 2.37-1.32 3.26-2.61 1.03-1.5 1.45-2.95 1.47-3.02-.03-.01-2.82-1.08-2.85-4.3M14.4 4.6c.74-.9 1.24-2.15 1.1-3.4-1.07.05-2.36.71-3.13 1.61-.69.8-1.29 2.07-1.13 3.29 1.19.1 2.41-.6 3.16-1.5" />
+    </svg>
+  );
+}
+
 /** GitHub's "octocat" mark — lucide-react ships no brand icons, so drawn inline. */
 function GithubIcon() {
   return (
@@ -229,6 +238,9 @@ interface FormState {
   azureEnabled: boolean;
   azureClientId: string;
   azureSecret: string;
+  appleEnabled: boolean;
+  appleClientId: string;
+  appleSecret: string;
 }
 
 function formFromDto(dto: AuthSettingsDto): FormState {
@@ -255,6 +267,9 @@ function formFromDto(dto: AuthSettingsDto): FormState {
     azureEnabled: dto.azureEnabled,
     azureClientId: dto.azureClientId,
     azureSecret: "",
+    appleEnabled: dto.appleEnabled,
+    appleClientId: dto.appleClientId,
+    appleSecret: "",
   };
 }
 
@@ -282,6 +297,9 @@ function toPayload(form: FormState): AuthSettingsUpdatePayload {
     azureEnabled: form.azureEnabled,
     azureClientId: form.azureClientId,
     ...(form.azureSecret ? { azureSecret: form.azureSecret } : {}),
+    appleEnabled: form.appleEnabled,
+    appleClientId: form.appleClientId,
+    ...(form.appleSecret ? { appleSecret: form.appleSecret } : {}),
   };
 }
 
@@ -638,6 +656,47 @@ export function AuthSettingsForm({ instance, role }: { instance: InstanceDto; ro
                     disabled={!canWrite}
                     onChange={(e) => setForm({ ...form, azureSecret: e.target.value })}
                     placeholder={query.data.azureSecretConfigured ? "(unchanged)" : ""}
+                    className={INPUT_CLASSES}
+                  />
+                </Field>
+              </ProviderRow>
+
+              <ProviderRow
+                icon={<AppleIcon />}
+                name="Apple"
+                enabled={form.appleEnabled}
+                expanded={expandedProvider === "apple"}
+                onToggleExpand={() => toggleExpanded("apple")}
+              >
+                <Toggle
+                  label="Enable Apple"
+                  checked={form.appleEnabled}
+                  disabled={!canWrite}
+                  onChange={(v) => setForm({ ...form, appleEnabled: v })}
+                />
+                <Field
+                  label="Services ID"
+                  hint="Apple's equivalent of a client ID, e.g. com.example.app.web. Comma-separate to add a native app's bundle ID alongside it."
+                >
+                  <input
+                    value={form.appleClientId}
+                    disabled={!canWrite}
+                    onChange={(e) => setForm({ ...form, appleClientId: e.target.value })}
+                    placeholder="com.example.app.web"
+                    className={INPUT_CLASSES}
+                  />
+                </Field>
+                <Field
+                  label="Client secret (generated JWT)"
+                  hint="Not a secret Apple hands you — a JWT you sign yourself with your .p8 key. Apple caps it at 6 months, so it expires and has to be regenerated and re-saved here. Add this instance's API URL + /callback as a Return URL on the Services ID."
+                >
+                  <input
+                    type="password"
+                    autoComplete="off"
+                    value={form.appleSecret}
+                    disabled={!canWrite}
+                    onChange={(e) => setForm({ ...form, appleSecret: e.target.value })}
+                    placeholder={query.data.appleSecretConfigured ? "(unchanged)" : ""}
                     className={INPUT_CLASSES}
                   />
                 </Field>

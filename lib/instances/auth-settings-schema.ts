@@ -3,9 +3,9 @@
  *
  * Everything optional (sparse update, mirrors lib/servers/schema.ts's
  * serverUpdateSchema): secret fields (googleSecret/githubSecret/azureSecret/
- * smtpPass) use the same "empty string means keep the existing stored
- * value" convention, stripped by the transform below so an untouched secret
- * never reaches the update handler.
+ * appleSecret/smtpPass) use the same "empty string means keep the existing
+ * stored value" convention, stripped by the transform below so an untouched
+ * secret never reaches the update handler.
  *
  * Free-text fields reject line breaks: these values are written verbatim
  * into a .env file with no escaping mechanism, so an embedded newline could
@@ -72,6 +72,13 @@ export const authSettingsUpdateSchema = z
     azureClientId: noLineBreak("azureClientId").optional(),
     azureSecret: z.string().max(1024).optional(),
 
+    appleEnabled: z.boolean().optional(),
+    // A Services ID, or a comma-separated list of them plus native bundle IDs.
+    appleClientId: noLineBreak("appleClientId").optional(),
+    // An ES256 JWT rather than a short opaque secret — three base64url segments
+    // run well past the 1024 the other providers get, so this cap is larger.
+    appleSecret: z.string().max(4096).optional(),
+
     emailTemplates: z.array(emailTemplateEntrySchema).max(6).optional(),
   })
   .superRefine((v, ctx) => {
@@ -88,12 +95,13 @@ export const authSettingsUpdateSchema = z
       seen.add(entry.flow);
     }
   })
-  .transform(({ smtpPass, googleSecret, githubSecret, azureSecret, ...rest }) => ({
+  .transform(({ smtpPass, googleSecret, githubSecret, azureSecret, appleSecret, ...rest }) => ({
     ...rest,
     ...(smtpPass ? { smtpPass } : {}),
     ...(googleSecret ? { googleSecret } : {}),
     ...(githubSecret ? { githubSecret } : {}),
     ...(azureSecret ? { azureSecret } : {}),
+    ...(appleSecret ? { appleSecret } : {}),
   }));
 
 export type AuthSettingsUpdateInput = z.infer<typeof authSettingsUpdateSchema>;

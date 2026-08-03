@@ -162,6 +162,16 @@ model InstanceAuthSettings {
   azureClientId  String? @map("azure_client_id")
   azureSecretEnc Bytes?  @map("azure_secret_enc")
 
+  // Apple's two fields mean something different from the others':
+  // `appleClientId` is a Services ID (and GoTrue accepts a comma-separated
+  // list, so a native bundle ID can ride along), and `appleSecretEnc` holds a
+  // developer-generated ES256 JWT that Apple caps at 6 months — not a
+  // long-lived secret like Google's. Stored identically regardless; the UI
+  // carries the explanation.
+  appleEnabled   Boolean @default(false) @map("apple_enabled")
+  appleClientId  String? @map("apple_client_id")
+  appleSecretEnc Bytes?  @map("apple_secret_enc")
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 

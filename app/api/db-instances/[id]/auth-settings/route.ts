@@ -72,6 +72,9 @@ function toDto(
     azureEnabled: values.azureEnabled,
     azureClientId: values.azureClientId,
     azureSecretConfigured: values.azureSecret !== "",
+    appleEnabled: values.appleEnabled,
+    appleClientId: values.appleClientId,
+    appleSecretConfigured: values.appleSecret !== "",
     emailTemplates: emailTemplatesDto(templateRows),
   };
 }
@@ -189,6 +192,9 @@ export const PATCH = withErrorHandling(async (req: Request, { params }: Ctx) => 
   if (body.azureEnabled !== undefined) data.azureEnabled = body.azureEnabled;
   if (body.azureClientId !== undefined) data.azureClientId = body.azureClientId;
   if (body.azureSecret !== undefined) data.azureSecretEnc = sealBytes(body.azureSecret);
+  if (body.appleEnabled !== undefined) data.appleEnabled = body.appleEnabled;
+  if (body.appleClientId !== undefined) data.appleClientId = body.appleClientId;
+  if (body.appleSecret !== undefined) data.appleSecretEnc = sealBytes(body.appleSecret);
 
   const settings = await prisma.instanceAuthSettings.upsert({
     where: { dbInstanceId: id },

@@ -119,6 +119,10 @@ export interface AuthSettingsDto {
   azureEnabled: boolean;
   azureClientId: string;
   azureSecretConfigured: boolean;
+  appleEnabled: boolean;
+  /** A Services ID (comma-separated list allowed), not a plain client id. */
+  appleClientId: string;
+  appleSecretConfigured: boolean;
   emailTemplates: EmailTemplateSummaryDto[];
 }
 
@@ -146,6 +150,10 @@ export interface AuthSettingsUpdatePayload {
   azureEnabled?: boolean;
   azureClientId?: string;
   azureSecret?: string;
+  appleEnabled?: boolean;
+  appleClientId?: string;
+  /** A developer-generated ES256 JWT Apple caps at 6 months, not a long-lived secret. */
+  appleSecret?: string;
   emailTemplates?: EmailTemplateUpdateEntry[];
 }
 

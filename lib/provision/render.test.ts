@@ -486,6 +486,9 @@ describe("renderInstanceCompose — Auth settings", () => {
     expect(envValue(envFile, "GOOGLE_SECRET")).toBe("");
     expect(envValue(envFile, "GITHUB_ENABLED")).toBe("false");
     expect(envValue(envFile, "AZURE_ENABLED")).toBe("false");
+    expect(envValue(envFile, "APPLE_ENABLED")).toBe("false");
+    expect(envValue(envFile, "APPLE_CLIENT_ID")).toBe("");
+    expect(envValue(envFile, "APPLE_SECRET")).toBe("");
   });
 
   it("substitutes every provided Auth setting", async () => {
@@ -513,6 +516,11 @@ describe("renderInstanceCompose — Auth settings", () => {
         azureEnabled: true,
         azureClientId: "azure-client-id",
         azureSecret: "azure-secret-value",
+        appleEnabled: true,
+        // Apple's client id is a Services ID, and GoTrue accepts a
+        // comma-separated list so a native bundle id can ride along.
+        appleClientId: "com.example.app.web,com.example.app",
+        appleSecret: "apple.generated.jwt",
       },
     });
 
@@ -542,6 +550,9 @@ describe("renderInstanceCompose — Auth settings", () => {
     expect(envValue(envFile, "AZURE_ENABLED")).toBe("true");
     expect(envValue(envFile, "AZURE_CLIENT_ID")).toBe("azure-client-id");
     expect(envValue(envFile, "AZURE_SECRET")).toBe("azure-secret-value");
+    expect(envValue(envFile, "APPLE_ENABLED")).toBe("true");
+    expect(envValue(envFile, "APPLE_CLIENT_ID")).toBe("com.example.app.web,com.example.app");
+    expect(envValue(envFile, "APPLE_SECRET")).toBe("apple.generated.jwt");
   });
 
   it("uncomments the OAuth env lines on the auth service so GoTrue always reads them", async () => {
@@ -549,6 +560,9 @@ describe("renderInstanceCompose — Auth settings", () => {
     expect(composeYaml).toContain("GOTRUE_EXTERNAL_GOOGLE_ENABLED: ${GOOGLE_ENABLED}");
     expect(composeYaml).toContain("GOTRUE_EXTERNAL_GITHUB_ENABLED: ${GITHUB_ENABLED}");
     expect(composeYaml).toContain("GOTRUE_EXTERNAL_AZURE_ENABLED: ${AZURE_ENABLED}");
+    expect(composeYaml).toContain("GOTRUE_EXTERNAL_APPLE_ENABLED: ${APPLE_ENABLED}");
+    expect(composeYaml).toContain("GOTRUE_EXTERNAL_APPLE_CLIENT_ID: ${APPLE_CLIENT_ID}");
+    expect(composeYaml).toContain("GOTRUE_EXTERNAL_APPLE_SECRET: ${APPLE_SECRET}");
     expect(composeYaml).not.toContain("# GOTRUE_EXTERNAL_GOOGLE_ENABLED");
   });
 
@@ -578,6 +592,9 @@ describe("renderInstanceCompose — Auth settings", () => {
           azureEnabled: false,
           azureClientId: "",
           azureSecret: "",
+          appleEnabled: false,
+          appleClientId: "",
+          appleSecret: "",
         },
       }),
     ).rejects.toThrow(/line break/);
