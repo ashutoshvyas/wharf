@@ -20,26 +20,10 @@
  */
 import { PrismaClient } from "@prisma/client";
 import { openWith, sealWith } from "../lib/crypto";
+import { TARGETS, type RotationTarget } from "./rotation-targets";
 
 const BATCH_SIZE = 100;
 const KEY_LENGTH = 32;
-
-interface RotationTarget {
-  /** Prisma client delegate name (camelCase model accessor). */
-  model: "server" | "website" | "dbInstance";
-  /** Encrypted Bytes? fields on that model. */
-  fields: string[];
-}
-
-/** The agreed model/field contract (see prisma/schema.prisma). */
-const TARGETS: RotationTarget[] = [
-  {
-    model: "server",
-    fields: ["sshPasswordEnc", "sshPrivateKeyEnc", "panelUserEnc", "panelPassEnc", "poolerSecretsEnc"],
-  },
-  { model: "website", fields: ["accessPasswordEnc"] },
-  { model: "dbInstance", fields: ["pgPasswordEnc", "anonKeyEnc", "serviceRoleKeyEnc", "jwtSecretEnc"] },
-];
 
 interface Counts {
   rotated: number;
@@ -157,7 +141,7 @@ async function main(): Promise<void> {
       totals.skipped += counts.skipped;
       totals.failed += counts.failed;
       console.log(
-        `  ${target.model.padEnd(10)} rotated=${counts.rotated} skipped=${counts.skipped} failed=${counts.failed}`,
+        `  ${target.model.padEnd(21)} rotated=${counts.rotated} skipped=${counts.skipped} failed=${counts.failed}`,
       );
     }
     console.log(
