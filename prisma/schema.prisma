@@ -134,6 +134,11 @@ model InstanceAuthSettings {
   enableEmailSignup      Boolean @default(true) @map("enable_email_signup")
   enableEmailAutoconfirm Boolean @default(true) @map("enable_email_autoconfirm")
   enablePhoneSignup      Boolean @default(false) @map("enable_phone_signup")
+  // GOTRUE_SMS_AUTOCONFIRM. Defaults true only because that is what
+  // .env.template hardcoded before this was configurable — it confirms a
+  // phone without sending or checking an OTP. Turning it off needs an SMS
+  // provider, which this template does not render yet.
+  enablePhoneAutoconfirm Boolean @default(true) @map("enable_phone_autoconfirm")
   enableAnonymousUsers   Boolean @default(false) @map("enable_anonymous_users")
   // GoTrue's linkIdentity/unlinkIdentity APIs — off in GoTrue's own default.
   manualLinkingEnabled   Boolean @default(false) @map("manual_linking_enabled")

@@ -54,6 +54,7 @@ function toDto(
     enableEmailSignup: values.enableEmailSignup,
     enableEmailAutoconfirm: values.enableEmailAutoconfirm,
     enablePhoneSignup: values.enablePhoneSignup,
+    enablePhoneAutoconfirm: values.enablePhoneAutoconfirm,
     enableAnonymousUsers: values.enableAnonymousUsers,
     manualLinkingEnabled: values.manualLinkingEnabled,
     jwtExpirySeconds: values.jwtExpirySeconds,
@@ -176,6 +177,9 @@ export const PATCH = withErrorHandling(async (req: Request, { params }: Ctx) => 
     data.enableEmailAutoconfirm = body.enableEmailAutoconfirm;
   }
   if (body.enablePhoneSignup !== undefined) data.enablePhoneSignup = body.enablePhoneSignup;
+  if (body.enablePhoneAutoconfirm !== undefined) {
+    data.enablePhoneAutoconfirm = body.enablePhoneAutoconfirm;
+  }
   if (body.enableAnonymousUsers !== undefined) {
     data.enableAnonymousUsers = body.enableAnonymousUsers;
   }

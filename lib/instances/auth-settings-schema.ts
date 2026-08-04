@@ -75,6 +75,7 @@ export const authSettingsUpdateSchema = z
     enableEmailSignup: z.boolean().optional(),
     enableEmailAutoconfirm: z.boolean().optional(),
     enablePhoneSignup: z.boolean().optional(),
+    enablePhoneAutoconfirm: z.boolean().optional(),
     enableAnonymousUsers: z.boolean().optional(),
     manualLinkingEnabled: z.boolean().optional(),
     jwtExpirySeconds: z.number().int().min(300).max(604_800).optional(),

@@ -486,6 +486,8 @@ describe("renderInstanceCompose — Auth settings", () => {
     expect(envValue(envFile, "ENABLE_EMAIL_SIGNUP")).toBe("true");
     expect(envValue(envFile, "ENABLE_EMAIL_AUTOCONFIRM")).toBe("true");
     expect(envValue(envFile, "ENABLE_PHONE_SIGNUP")).toBe("false");
+    // Defaults true: what .env.template hardcoded before it was configurable.
+    expect(envValue(envFile, "ENABLE_PHONE_AUTOCONFIRM")).toBe("true");
     expect(envValue(envFile, "ENABLE_ANONYMOUS_USERS")).toBe("false");
     expect(envValue(envFile, "JWT_EXPIRY")).toBe("3600");
     expect(envValue(envFile, "ADDITIONAL_REDIRECT_URLS")).toBe("");
@@ -516,6 +518,7 @@ describe("renderInstanceCompose — Auth settings", () => {
         enableEmailSignup: false,
         enableEmailAutoconfirm: false,
         enablePhoneSignup: true,
+        enablePhoneAutoconfirm: false,
         enableAnonymousUsers: true,
         manualLinkingEnabled: true,
         jwtExpirySeconds: 7200,
@@ -554,6 +557,7 @@ describe("renderInstanceCompose — Auth settings", () => {
     expect(envValue(envFile, "ENABLE_EMAIL_SIGNUP")).toBe("false");
     expect(envValue(envFile, "ENABLE_EMAIL_AUTOCONFIRM")).toBe("false");
     expect(envValue(envFile, "ENABLE_PHONE_SIGNUP")).toBe("true");
+    expect(envValue(envFile, "ENABLE_PHONE_AUTOCONFIRM")).toBe("false");
     expect(envValue(envFile, "ENABLE_ANONYMOUS_USERS")).toBe("true");
     expect(envValue(envFile, "MANUAL_LINKING_ENABLED")).toBe("true");
     expect(envValue(envFile, "JWT_EXPIRY")).toBe("7200");
@@ -673,6 +677,7 @@ describe("renderInstanceCompose — Auth settings", () => {
           enableEmailSignup: true,
           enableEmailAutoconfirm: true,
           enablePhoneSignup: false,
+          enablePhoneAutoconfirm: true,
           enableAnonymousUsers: false,
           manualLinkingEnabled: false,
           jwtExpirySeconds: 3600,

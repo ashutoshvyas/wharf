@@ -221,6 +221,7 @@ interface FormState {
   enableEmailSignup: boolean;
   enableEmailAutoconfirm: boolean;
   enablePhoneSignup: boolean;
+  enablePhoneAutoconfirm: boolean;
   enableAnonymousUsers: boolean;
   manualLinkingEnabled: boolean;
   jwtExpirySeconds: string;
@@ -256,6 +257,7 @@ function formFromDto(dto: AuthSettingsDto): FormState {
     enableEmailSignup: dto.enableEmailSignup,
     enableEmailAutoconfirm: dto.enableEmailAutoconfirm,
     enablePhoneSignup: dto.enablePhoneSignup,
+    enablePhoneAutoconfirm: dto.enablePhoneAutoconfirm,
     enableAnonymousUsers: dto.enableAnonymousUsers,
     manualLinkingEnabled: dto.manualLinkingEnabled,
     jwtExpirySeconds: String(dto.jwtExpirySeconds),
@@ -292,6 +294,7 @@ function toPayload(form: FormState): AuthSettingsUpdatePayload {
     enableEmailSignup: form.enableEmailSignup,
     enableEmailAutoconfirm: form.enableEmailAutoconfirm,
     enablePhoneSignup: form.enablePhoneSignup,
+    enablePhoneAutoconfirm: form.enablePhoneAutoconfirm,
     enableAnonymousUsers: form.enableAnonymousUsers,
     manualLinkingEnabled: form.manualLinkingEnabled,
     jwtExpirySeconds: Number(form.jwtExpirySeconds),
@@ -613,11 +616,21 @@ export function AuthSettingsForm({ instance, role }: { instance: InstanceDto; ro
                   disabled={!canWrite}
                   onChange={(v) => setForm({ ...form, enablePhoneSignup: v })}
                 />
-                <p className="text-xs text-neutral-500">
-                  Sends OTPs via an SMS provider (Twilio, MessageBird, ...) — not wired up
-                  self-hosted yet, so phone sign-up will accept the toggle but cannot send
-                  codes until that&apos;s added.
-                </p>
+                <div>
+                  <Toggle
+                    label="Auto-confirm phone sign-ups (skip the verification SMS)"
+                    checked={form.enablePhoneAutoconfirm}
+                    disabled={!canWrite}
+                    onChange={(v) => setForm({ ...form, enablePhoneAutoconfirm: v })}
+                  />
+                  <p className="mt-1 text-xs text-neutral-500">
+                    On, a phone number is marked confirmed at sign-up without any code being
+                    sent or checked — nothing proves the user controls that number. Off is
+                    the branch that sends a verification SMS, which needs an SMS provider
+                    (Twilio, MessageBird, ...). Those are not configurable here yet, so
+                    turning this off today leaves phone sign-up unable to complete.
+                  </p>
+                </div>
               </ProviderRow>
 
               <ProviderRow

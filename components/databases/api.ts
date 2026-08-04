@@ -101,6 +101,7 @@ export interface AuthSettingsDto {
   enableEmailSignup: boolean;
   enableEmailAutoconfirm: boolean;
   enablePhoneSignup: boolean;
+  enablePhoneAutoconfirm: boolean;
   enableAnonymousUsers: boolean;
   manualLinkingEnabled: boolean;
   jwtExpirySeconds: number;
@@ -141,6 +142,7 @@ export interface AuthSettingsUpdatePayload {
   enableEmailSignup?: boolean;
   enableEmailAutoconfirm?: boolean;
   enablePhoneSignup?: boolean;
+  enablePhoneAutoconfirm?: boolean;
   enableAnonymousUsers?: boolean;
   manualLinkingEnabled?: boolean;
   jwtExpirySeconds?: number;

@@ -46,6 +46,7 @@ export function decryptAuthSettings(row: InstanceAuthSettings | null): AuthSetti
     enableEmailSignup: row.enableEmailSignup,
     enableEmailAutoconfirm: row.enableEmailAutoconfirm,
     enablePhoneSignup: row.enablePhoneSignup,
+    enablePhoneAutoconfirm: row.enablePhoneAutoconfirm,
     enableAnonymousUsers: row.enableAnonymousUsers,
     manualLinkingEnabled: row.manualLinkingEnabled,
     jwtExpirySeconds: row.jwtExpirySeconds,

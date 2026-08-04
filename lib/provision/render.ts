@@ -143,6 +143,8 @@ export interface AuthSettingsValues {
   enableEmailSignup: boolean;
   enableEmailAutoconfirm: boolean;
   enablePhoneSignup: boolean;
+  /** GOTRUE_SMS_AUTOCONFIRM — true confirms a phone without verifying an OTP. */
+  enablePhoneAutoconfirm: boolean;
   enableAnonymousUsers: boolean;
   /** GoTrue's linkIdentity/unlinkIdentity APIs. */
   manualLinkingEnabled: boolean;
@@ -191,6 +193,10 @@ export const DEFAULT_AUTH_SETTINGS: AuthSettingsValues = {
   enableEmailSignup: true,
   enableEmailAutoconfirm: true,
   enablePhoneSignup: false,
+  // true, not false: .env.template hardcoded ENABLE_PHONE_AUTOCONFIRM=true
+  // before this was configurable, and these defaults exist to reproduce the
+  // previous output exactly.
+  enablePhoneAutoconfirm: true,
   enableAnonymousUsers: false,
   manualLinkingEnabled: false,
   jwtExpirySeconds: 3600,
@@ -497,6 +503,7 @@ async function renderEnv(
     ENABLE_EMAIL_SIGNUP: bool(auth.enableEmailSignup),
     ENABLE_EMAIL_AUTOCONFIRM: bool(auth.enableEmailAutoconfirm),
     ENABLE_PHONE_SIGNUP: bool(auth.enablePhoneSignup),
+    ENABLE_PHONE_AUTOCONFIRM: bool(auth.enablePhoneAutoconfirm),
     ENABLE_ANONYMOUS_USERS: bool(auth.enableAnonymousUsers),
     MANUAL_LINKING_ENABLED: bool(auth.manualLinkingEnabled),
     JWT_EXPIRY: String(auth.jwtExpirySeconds),
