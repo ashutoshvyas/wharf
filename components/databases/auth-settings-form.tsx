@@ -796,7 +796,17 @@ export function AuthSettingsForm({ instance, role }: { instance: InstanceDto; ro
                       MSG91 credentials stay in this panel and are never written to the
                       instance. The instance calls WHARF to send each code, so codes stop
                       going out while the panel is unreachable — Twilio, being native to the
-                      auth container, has no such dependency.
+                      auth container, has no such dependency.{" "}
+                      <a
+                        href="/docs/sms/msg91"
+                        target="_blank"
+                        rel="noreferrer noopener"
+                        className="text-cobalt-600 underline underline-offset-2 hover:text-cobalt-700"
+                      >
+                        Setup guide
+                      </a>{" "}
+                      — covers DLT registration and the template variable, and needs no login,
+                      so it can be handed to whoever manages the MSG91 account.
                     </p>
                   </>
                 ) : null}
