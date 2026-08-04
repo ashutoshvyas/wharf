@@ -204,7 +204,14 @@ describe("deriveAncillarySecrets", () => {
 
     const values = Object.values(derived);
     expect(new Set(values).size).toBe(values.length);
-    for (const value of values) expect(value).toMatch(ALPHANUMERIC_ONLY);
+    // smsHookSecret is the one deliberate exception: it is rendered as
+    // `v1,whsec_<value>` and GoTrue base64-DECODES it into the HMAC key, so
+    // it must be standard base64 (which includes +, / and =) rather than the
+    // hex every other value here uses.
+    const { smsHookSecret, ...alphanumeric } = derived;
+    for (const value of Object.values(alphanumeric)) expect(value).toMatch(ALPHANUMERIC_ONLY);
+    expect(smsHookSecret).toMatch(/^[A-Za-z0-9+/]+=*$/);
+    expect(Buffer.from(smsHookSecret, "base64")).toHaveLength(32);
   });
 
   it("never reuses upstream's published example values", () => {

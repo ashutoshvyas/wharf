@@ -41,6 +41,9 @@ describe("authSettingsUpdateSchema", () => {
     "appleClientId",
     "siteUrl",
     "oauthCallbackUrl",
+    "smsTemplate",
+    "smsTwilioAccountSid",
+    "smsMsg91TemplateId",
   ])("rejects a line break in %s (.env injection guard)", (field) => {
     expect(
       authSettingsUpdateSchema.safeParse({ [field]: "line1\nEVIL=1" }).success,
@@ -64,6 +67,47 @@ describe("authSettingsUpdateSchema", () => {
     for (const bad of ["app.example.com", "/auth/v1/callback", "ftp://app.example.com", "   "]) {
       expect(authSettingsUpdateSchema.safeParse({ [field]: bad }).success).toBe(false);
     }
+  });
+
+  it("only accepts SMS providers that have actually been wired", () => {
+    for (const p of ["", "twilio", "msg91"]) {
+      expect(authSettingsUpdateSchema.safeParse({ smsProvider: p }).success).toBe(true);
+    }
+    // Native to GoTrue, but no credential fields exist for them here yet, so
+    // offering them would be a dead end.
+    for (const p of ["messagebird", "vonage", "textlocal", "twilio_verify"]) {
+      expect(authSettingsUpdateSchema.safeParse({ smsProvider: p }).success).toBe(false);
+    }
+  });
+
+  it("requires smsMaxFrequency to carry a unit", () => {
+    // GOTRUE_SMS_MAX_FREQUENCY parses as a Go time.Duration: "60" is not 60s.
+    for (const good of ["1m0s", "30s", "500ms", "2h"]) {
+      expect(authSettingsUpdateSchema.safeParse({ smsMaxFrequency: good }).success).toBe(true);
+    }
+    for (const bad of ["60", "1 minute", "m"]) {
+      expect(authSettingsUpdateSchema.safeParse({ smsMaxFrequency: bad }).success).toBe(false);
+    }
+  });
+
+  it("rejects an OTP length GoTrue would silently clamp", () => {
+    // GoTrue resets anything outside 6..10 back to 6 without saying so.
+    expect(authSettingsUpdateSchema.safeParse({ smsOtpLength: 6 }).success).toBe(true);
+    expect(authSettingsUpdateSchema.safeParse({ smsOtpLength: 10 }).success).toBe(true);
+    expect(authSettingsUpdateSchema.safeParse({ smsOtpLength: 4 }).success).toBe(false);
+    expect(authSettingsUpdateSchema.safeParse({ smsOtpLength: 11 }).success).toBe(false);
+  });
+
+  it("keeps an untouched SMS secret out of the update entirely", () => {
+    const out = authSettingsUpdateSchema.parse({
+      smsTwilioAuthToken: "",
+      smsMsg91AuthKey: "",
+    });
+    expect(out).not.toHaveProperty("smsTwilioAuthToken");
+    expect(out).not.toHaveProperty("smsMsg91AuthKey");
+
+    const set = authSettingsUpdateSchema.parse({ smsMsg91AuthKey: "real-key" });
+    expect(set.smsMsg91AuthKey).toBe("real-key");
   });
 
   // Apple's "secret" is an ES256 JWT the developer signs themselves, not a

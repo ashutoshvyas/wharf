@@ -288,13 +288,43 @@ describe("renderInstanceCompose — vendored template integrity", () => {
       await readFile(path.join(process.cwd(), "templates", "supabase", "docker-compose.yml"), "utf8"),
     ) as ComposeDoc;
     for (const name of Object.keys(template.services)) {
-      if (name === "kong" || name === "studio" || name === "db") continue;
+      // kong/studio/db are rewritten (labels, networks, ports); `auth` has
+      // its unused send-SMS hook keys stripped — both covered by their own
+      // tests below, which assert exactly what changed.
+      if (name === "kong" || name === "studio" || name === "db" || name === "auth") continue;
       const { doc } = await renderDoc();
       expect([name, doc.services[name]]).toEqual([name, template.services[name]]);
     }
     expect((load((await renderDoc()).composeYaml) as ComposeDoc).volumes).toEqual(
       template.volumes,
     );
+  });
+
+  it("changes the auth service only by stripping the send-SMS hook keys it does not use", async () => {
+    const template = load(
+      await readFile(path.join(process.cwd(), "templates", "supabase", "docker-compose.yml"), "utf8"),
+    ) as ComposeDoc;
+    const templateAuth = template.services.auth as { environment: Record<string, string> };
+    const HOOK_KEYS = [
+      "GOTRUE_HOOK_SEND_SMS_ENABLED",
+      "GOTRUE_HOOK_SEND_SMS_URI",
+      "GOTRUE_HOOK_SEND_SMS_SECRETS",
+    ];
+
+    // No hook-delivered provider: identical to the vendored template except
+    // those three keys are absent.
+    const withoutHook = (await renderDoc()).doc.services.auth as {
+      environment: Record<string, string>;
+    };
+    const expected = { ...templateAuth.environment };
+    for (const key of HOOK_KEYS) delete expected[key];
+    expect(withoutHook.environment).toEqual(expected);
+
+    // MSG91 selected: nothing is stripped, so it matches the template exactly.
+    const withHook = (
+      await renderDoc({ authSettings: { ...DEFAULT_AUTH_SETTINGS, smsProvider: "msg91" } })
+    ).doc.services.auth as { environment: Record<string, string> };
+    expect(withHook.environment).toEqual(templateAuth.environment);
   });
 
   it("changes kong and studio only by labels, networks and ports", async () => {
@@ -550,6 +580,18 @@ describe("renderInstanceCompose — Auth settings", () => {
         appleClientId: "com.example.app.web,com.example.app",
         appleSecret: "apple.generated.jwt",
         appleEmailOptional: true,
+        smsProvider: "twilio",
+        smsOtpExp: 120,
+        smsOtpLength: 8,
+        smsMaxFrequency: "30s",
+        smsTemplate: "Your code is {{ .Code }}",
+        smsTwilioAccountSid: "ACtwilio",
+        smsTwilioAuthToken: "twilio-token",
+        smsTwilioMessageServiceSid: "MGtwilio",
+        smsMsg91AuthKey: "",
+        smsMsg91TemplateId: "",
+        smsMsg91SenderId: "",
+        smsMsg91OtpVariable: "OTP",
       },
     });
 
@@ -647,6 +689,68 @@ describe("renderInstanceCompose — Auth settings", () => {
     expect(envValue(envFile, "API_EXTERNAL_URL")).toBe("https://clienta.wharf.example.com");
   });
 
+  it("renders Twilio natively and leaves the send-SMS hook keys off entirely", async () => {
+    const { composeYaml, envFile } = await renderDoc({
+      authSettings: {
+        ...DEFAULT_AUTH_SETTINGS,
+        smsProvider: "twilio",
+        smsTwilioAccountSid: "ACtwilio",
+        smsTwilioAuthToken: "twilio-token",
+        smsTwilioMessageServiceSid: "MGtwilio",
+      },
+      instanceId: "inst-1",
+      panelUrl: "https://wharf.example.com",
+    });
+    expect(envValue(envFile, "SMS_PROVIDER")).toBe("twilio");
+    expect(envValue(envFile, "SMS_TWILIO_ACCOUNT_SID")).toBe("ACtwilio");
+    expect(envValue(envFile, "SMS_TWILIO_AUTH_TOKEN")).toBe("twilio-token");
+    // A native provider needs no hook, so the keys are stripped rather than
+    // rendered empty — an unused hook cannot then fail config validation.
+    expect(composeYaml).not.toContain("GOTRUE_HOOK_SEND_SMS_ENABLED");
+    expect(composeYaml).not.toContain("GOTRUE_HOOK_SEND_SMS_URI");
+  });
+
+  it("routes MSG91 through the panel hook and leaves SMS_PROVIDER empty", async () => {
+    const { composeYaml, envFile } = await renderDoc({
+      authSettings: { ...DEFAULT_AUTH_SETTINGS, smsProvider: "msg91" },
+      instanceId: "inst-1",
+      panelUrl: "https://wharf.example.com/",
+    });
+    // GoTrue bypasses the provider entirely when the hook is on; naming one
+    // here would only invite confusion about which is in play.
+    expect(envValue(envFile, "SMS_PROVIDER")).toBe("");
+    expect(envValue(envFile, "HOOK_SEND_SMS_ENABLED")).toBe("true");
+    expect(envValue(envFile, "HOOK_SEND_SMS_URI")).toBe(
+      "https://wharf.example.com/api/db-instances/inst-1/sms-hook",
+    );
+    expect(envValue(envFile, "HOOK_SEND_SMS_SECRETS")).toMatch(/^v1,whsec_.+/);
+    expect(composeYaml).toContain("GOTRUE_HOOK_SEND_SMS_ENABLED: ${HOOK_SEND_SMS_ENABLED}");
+    // MSG91 credentials are the panel's, and must never reach the instance.
+    // (The word itself appears in the template's explanatory comments, so
+    // this checks for a rendered credential, not a mention.)
+    expect(envFile).not.toMatch(/^MSG91|AUTH_KEY=/m);
+  });
+
+  it("refuses to enable the hook when there is no panel URL to call back to", async () => {
+    // Enabling it with nowhere to call would swallow every OTP silently.
+    const { envFile } = await renderDoc({
+      authSettings: { ...DEFAULT_AUTH_SETTINGS, smsProvider: "msg91" },
+      instanceId: "inst-1",
+    });
+    expect(envValue(envFile, "HOOK_SEND_SMS_ENABLED")).toBe("false");
+    expect(envValue(envFile, "HOOK_SEND_SMS_URI")).toBe("");
+    expect(envValue(envFile, "HOOK_SEND_SMS_SECRETS")).toBe("");
+  });
+
+  it("always renders concrete SMS numerics — empty is a parse error, not a default", async () => {
+    // GOTRUE_SMS_OTP_EXP/OTP_LENGTH/MAX_FREQUENCY are uint/int/time.Duration.
+    const { envFile } = await renderDoc();
+    expect(envValue(envFile, "SMS_PROVIDER")).toBe("");
+    expect(envValue(envFile, "SMS_OTP_EXP")).toBe("60");
+    expect(envValue(envFile, "SMS_OTP_LENGTH")).toBe("6");
+    expect(envValue(envFile, "SMS_MAX_FREQUENCY")).toBe("1m0s");
+  });
+
   it("wires manual linking to the env var GoTrue actually reads", async () => {
     // GoTrue derives this name from SecurityConfiguration.ManualLinkingEnabled
     // via split_words — a typo here is silent, the setting simply never applies.
@@ -705,6 +809,18 @@ describe("renderInstanceCompose — Auth settings", () => {
           appleClientId: "",
           appleSecret: "",
           appleEmailOptional: false,
+          smsProvider: "",
+          smsOtpExp: 60,
+          smsOtpLength: 6,
+          smsMaxFrequency: "1m0s",
+          smsTemplate: "",
+          smsTwilioAccountSid: "",
+          smsTwilioAuthToken: "",
+          smsTwilioMessageServiceSid: "",
+          smsMsg91AuthKey: "",
+          smsMsg91TemplateId: "",
+          smsMsg91SenderId: "",
+          smsMsg91OtpVariable: "OTP",
         },
       }),
     ).rejects.toThrow(/line break/);

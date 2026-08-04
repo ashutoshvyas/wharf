@@ -138,6 +138,25 @@ export interface EmailTemplateValues {
 }
 
 /** Plain (decrypted) shape of one instance's admin-configurable Auth settings. */
+/**
+ * SMS delivery backends the panel offers. Deliberately not GoTrue's full
+ * native list (messagebird/textlocal/vonage/twilio_verify are all supported
+ * upstream and would be additive here) — only what WHARF has been asked to
+ * wire, so every option in the dropdown is one that has actually been built
+ * and has credential fields behind it.
+ *
+ * "msg91" is the odd one: GoTrue's GetSmsProvider does not know it, so it is
+ * delivered through the send-SMS hook instead. An enabled hook bypasses
+ * GOTRUE_SMS_PROVIDER entirely, which is why this is one field and not two.
+ */
+export const SMS_PROVIDERS = ["", "twilio", "msg91"] as const;
+export type SmsProvider = (typeof SMS_PROVIDERS)[number];
+
+/** MSG91 is delivered via the hook; everything else is a native GoTrue provider. */
+export function usesSmsHook(provider: SmsProvider): boolean {
+  return provider === "msg91";
+}
+
 export interface AuthSettingsValues {
   disableSignup: boolean;
   enableEmailSignup: boolean;
@@ -164,6 +183,20 @@ export interface AuthSettingsValues {
   smtpPass: string;
   smtpSenderName: string;
   smtpAdminEmail: string;
+  /** "" (none), "twilio" (native), or "msg91" (via the panel's send-SMS hook). */
+  smsProvider: SmsProvider;
+  smsOtpExp: number;
+  smsOtpLength: number;
+  /** A Go duration ("1m0s"), not a number — GOTRUE_SMS_MAX_FREQUENCY is time.Duration. */
+  smsMaxFrequency: string;
+  smsTemplate: string;
+  smsTwilioAccountSid: string;
+  smsTwilioAuthToken: string;
+  smsTwilioMessageServiceSid: string;
+  smsMsg91AuthKey: string;
+  smsMsg91TemplateId: string;
+  smsMsg91SenderId: string;
+  smsMsg91OtpVariable: string;
   googleEnabled: boolean;
   /** Comma-separated: the web OAuth client plus any native/One Tap client ids. */
   googleClientId: string;
@@ -209,6 +242,21 @@ export const DEFAULT_AUTH_SETTINGS: AuthSettingsValues = {
   smtpPass: "fake_mail_password",
   smtpSenderName: "fake_sender",
   smtpAdminEmail: "admin@example.com",
+  smsProvider: "",
+  // GoTrue's own ApplyDefaults values. Rendered explicitly rather than left
+  // empty: these land in a `uint`/`int`/`time.Duration`, and an empty string
+  // is a parse error at container start, not a silent fallback.
+  smsOtpExp: 60,
+  smsOtpLength: 6,
+  smsMaxFrequency: "1m0s",
+  smsTemplate: "",
+  smsTwilioAccountSid: "",
+  smsTwilioAuthToken: "",
+  smsTwilioMessageServiceSid: "",
+  smsMsg91AuthKey: "",
+  smsMsg91TemplateId: "",
+  smsMsg91SenderId: "",
+  smsMsg91OtpVariable: "OTP",
   googleEnabled: false,
   googleClientId: "",
   googleSecret: "",
@@ -403,6 +451,21 @@ async function renderCompose(
   kong.labels = kongLabels(input.project, apiSubdomain);
   studio.labels = studioLabels(input.project, studioSubdomain);
 
+  // The send-SMS hook is only meaningful for a provider GoTrue has
+  // no native driver for. Strip the three keys entirely otherwise, rather
+  // than rendering them empty: an instance with no hook provider then carries
+  // no hook config at all, and cannot fail config validation over a setting
+  // it does not use.
+  const auth = input.authSettings ?? DEFAULT_AUTH_SETTINGS;
+  if (!usesSmsHook(auth.smsProvider)) {
+    const authEnv = doc?.services?.auth?.environment;
+    if (authEnv && typeof authEnv === "object" && !Array.isArray(authEnv)) {
+      delete (authEnv as Record<string, unknown>).GOTRUE_HOOK_SEND_SMS_ENABLED;
+      delete (authEnv as Record<string, unknown>).GOTRUE_HOOK_SEND_SMS_URI;
+      delete (authEnv as Record<string, unknown>).GOTRUE_HOOK_SEND_SMS_SECRETS;
+    }
+  }
+
   joinNetwork(kong, TRAEFIK_NETWORK);
   joinNetwork(studio, TRAEFIK_NETWORK);
   // The shared per-server Supavisor pooler (lib/bootstrap/steps.ts
@@ -497,6 +560,15 @@ async function renderEnv(
   // what this template hardcoded before this feature existed, so a fresh
   // provision with nothing configured yet renders byte-identical output.
   const auth = input.authSettings ?? DEFAULT_AUTH_SETTINGS;
+
+  // Where GoTrue POSTs its send-SMS hook. Empty unless a
+  // hook-delivered provider is selected AND we know the panel's own URL —
+  // without PANEL_URL there is nothing for the instance to call back to, so
+  // the hook stays off rather than pointing GoTrue at a broken address.
+  const smsHookUri =
+    usesSmsHook(auth.smsProvider) && input.instanceId && input.panelUrl
+      ? `${input.panelUrl.replace(/\/+$/, "")}/api/db-instances/${input.instanceId}/sms-hook`
+      : "";
   const bool = (b: boolean) => (b ? "true" : "false");
   Object.assign(values, {
     DISABLE_SIGNUP: bool(auth.disableSignup),
@@ -520,6 +592,25 @@ async function renderEnv(
     SMTP_PASS: auth.smtpPass,
     SMTP_SENDER_NAME: auth.smtpSenderName,
     SMTP_ADMIN_EMAIL: auth.smtpAdminEmail,
+
+    // A hook-delivered provider (MSG91) leaves SMS_PROVIDER empty on purpose:
+    // GoTrue picks the hook over the provider when both are set, and an empty
+    // provider is only ever resolved at send time, never at config load.
+    SMS_PROVIDER: usesSmsHook(auth.smsProvider) ? "" : auth.smsProvider,
+    SMS_OTP_EXP: String(auth.smsOtpExp),
+    SMS_OTP_LENGTH: String(auth.smsOtpLength),
+    SMS_MAX_FREQUENCY: auth.smsMaxFrequency,
+    SMS_TEMPLATE: auth.smsTemplate,
+    SMS_TWILIO_ACCOUNT_SID: auth.smsTwilioAccountSid,
+    SMS_TWILIO_AUTH_TOKEN: auth.smsTwilioAuthToken,
+    SMS_TWILIO_MESSAGE_SERVICE_SID: auth.smsTwilioMessageServiceSid,
+    // The hook calls back into this panel, which holds the MSG91 credentials
+    // — they are never rendered into the instance's .env at all.
+    // Keyed off the resolved URI, not the provider: enabling the hook with
+    // nowhere to call would swallow every OTP silently.
+    HOOK_SEND_SMS_ENABLED: bool(smsHookUri !== ""),
+    HOOK_SEND_SMS_URI: smsHookUri,
+    HOOK_SEND_SMS_SECRETS: smsHookUri ? `v1,whsec_${ancillary.smsHookSecret}` : "",
     GOOGLE_ENABLED: bool(auth.googleEnabled),
     GOOGLE_CLIENT_ID: auth.googleClientId,
     GOOGLE_SECRET: auth.googleSecret,

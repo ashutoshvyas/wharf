@@ -58,6 +58,9 @@ export const TARGETS: RotationTarget[] = [
       "githubSecretEnc",
       "azureSecretEnc",
       "appleSecretEnc",
+      // SMS provider credentials.
+      "smsTwilioAuthTokenEnc",
+      "smsMsg91AuthKeyEnc",
     ],
   },
   {

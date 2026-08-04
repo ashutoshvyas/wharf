@@ -25,9 +25,16 @@ import { exec, sftpWrite, withConnection } from "@/lib/ssh";
 import {
   DEFAULT_AUTH_SETTINGS,
   renderInstanceCompose,
+  SMS_PROVIDERS,
   type AuthSettingsValues,
   type EmailTemplateValues,
+  type SmsProvider,
 } from "./render";
+
+/** Guards the free-text `sms_provider` column back into the union. */
+function isSmsProvider(value: string | null): value is SmsProvider {
+  return value !== null && (SMS_PROVIDERS as readonly string[]).includes(value);
+}
 
 /** The connection handle lib/ssh hands out (ssh2 Client, never imported here). */
 type SshConnection = Parameters<typeof exec>[0];
@@ -59,6 +66,25 @@ export function decryptAuthSettings(row: InstanceAuthSettings | null): AuthSetti
     smtpPass: row.smtpPassEnc ? open(row.smtpPassEnc) : DEFAULT_AUTH_SETTINGS.smtpPass,
     smtpSenderName: row.smtpSenderName ?? DEFAULT_AUTH_SETTINGS.smtpSenderName,
     smtpAdminEmail: row.smtpAdminEmail ?? DEFAULT_AUTH_SETTINGS.smtpAdminEmail,
+    smsProvider: isSmsProvider(row.smsProvider) ? row.smsProvider : DEFAULT_AUTH_SETTINGS.smsProvider,
+    smsOtpExp: row.smsOtpExp ?? DEFAULT_AUTH_SETTINGS.smsOtpExp,
+    smsOtpLength: row.smsOtpLength ?? DEFAULT_AUTH_SETTINGS.smsOtpLength,
+    smsMaxFrequency: row.smsMaxFrequency ?? DEFAULT_AUTH_SETTINGS.smsMaxFrequency,
+    smsTemplate: row.smsTemplate ?? DEFAULT_AUTH_SETTINGS.smsTemplate,
+    smsTwilioAccountSid: row.smsTwilioAccountSid ?? DEFAULT_AUTH_SETTINGS.smsTwilioAccountSid,
+    smsTwilioAuthToken: row.smsTwilioAuthTokenEnc
+      ? open(row.smsTwilioAuthTokenEnc)
+      : DEFAULT_AUTH_SETTINGS.smsTwilioAuthToken,
+    smsTwilioMessageServiceSid:
+      row.smsTwilioMessageServiceSid ?? DEFAULT_AUTH_SETTINGS.smsTwilioMessageServiceSid,
+    smsMsg91AuthKey: row.smsMsg91AuthKeyEnc
+      ? open(row.smsMsg91AuthKeyEnc)
+      : DEFAULT_AUTH_SETTINGS.smsMsg91AuthKey,
+    smsMsg91TemplateId: row.smsMsg91TemplateId ?? DEFAULT_AUTH_SETTINGS.smsMsg91TemplateId,
+    smsMsg91SenderId: row.smsMsg91SenderId ?? DEFAULT_AUTH_SETTINGS.smsMsg91SenderId,
+    // Falls back to "OTP" rather than "" — an empty variable name would build
+    // an MSG91 payload the template can never substitute into.
+    smsMsg91OtpVariable: row.smsMsg91OtpVariable || DEFAULT_AUTH_SETTINGS.smsMsg91OtpVariable,
     googleEnabled: row.googleEnabled,
     googleClientId: row.googleClientId ?? DEFAULT_AUTH_SETTINGS.googleClientId,
     googleSecret: row.googleSecretEnc ? open(row.googleSecretEnc) : DEFAULT_AUTH_SETTINGS.googleSecret,

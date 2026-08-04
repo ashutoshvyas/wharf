@@ -269,17 +269,22 @@ services:
       GOTRUE_EXTERNAL_APPLE_REDIRECT_URI: ${OAUTH_CALLBACK_URL}
       GOTRUE_EXTERNAL_APPLE_EMAIL_OPTIONAL: ${APPLE_EMAIL_OPTIONAL}
 
-      # Uncomment to configure SMS delivery (phone auth and phone MFA).
-      # GOTRUE_SMS_PROVIDER: ${SMS_PROVIDER}
-      # GOTRUE_SMS_OTP_EXP: ${SMS_OTP_EXP}
-      # GOTRUE_SMS_OTP_LENGTH: ${SMS_OTP_LENGTH}
-      # GOTRUE_SMS_MAX_FREQUENCY: ${SMS_MAX_FREQUENCY}
-      # GOTRUE_SMS_TEMPLATE: ${SMS_TEMPLATE}
+      # SMS delivery — admin-configurable via the panel's instance
+      # Auth settings. SMS_PROVIDER renders empty until an operator picks one,
+      # which is safe: GoTrue resolves the provider when it sends a message,
+      # not at config load. The three numeric/duration vars below are NOT safe
+      # to leave empty (uint / int / time.Duration), so the panel always
+      # renders concrete values — GoTrue's own defaults when unconfigured.
+      GOTRUE_SMS_PROVIDER: ${SMS_PROVIDER}
+      GOTRUE_SMS_OTP_EXP: ${SMS_OTP_EXP}
+      GOTRUE_SMS_OTP_LENGTH: ${SMS_OTP_LENGTH}
+      GOTRUE_SMS_MAX_FREQUENCY: ${SMS_MAX_FREQUENCY}
+      GOTRUE_SMS_TEMPLATE: ${SMS_TEMPLATE}
 
       # Twilio credentials (when SMS_PROVIDER=twilio)
-      # GOTRUE_SMS_TWILIO_ACCOUNT_SID: ${SMS_TWILIO_ACCOUNT_SID}
-      # GOTRUE_SMS_TWILIO_AUTH_TOKEN: ${SMS_TWILIO_AUTH_TOKEN}
-      # GOTRUE_SMS_TWILIO_MESSAGE_SERVICE_SID: ${SMS_TWILIO_MESSAGE_SERVICE_SID}
+      GOTRUE_SMS_TWILIO_ACCOUNT_SID: ${SMS_TWILIO_ACCOUNT_SID}
+      GOTRUE_SMS_TWILIO_AUTH_TOKEN: ${SMS_TWILIO_AUTH_TOKEN}
+      GOTRUE_SMS_TWILIO_MESSAGE_SERVICE_SID: ${SMS_TWILIO_MESSAGE_SERVICE_SID}
 
       # Test OTP mappings for development
       # GOTRUE_SMS_TEST_OTP: ${SMS_TEST_OTP}
@@ -315,9 +320,16 @@ services:
       # GOTRUE_HOOK_PASSWORD_VERIFICATION_ATTEMPT_ENABLED: "true"
       # GOTRUE_HOOK_PASSWORD_VERIFICATION_ATTEMPT_URI: "pg-functions://postgres/public/password_verification_attempt"
 
-      # GOTRUE_HOOK_SEND_SMS_ENABLED: "false"
-      # GOTRUE_HOOK_SEND_SMS_URI: "pg-functions://postgres/public/custom_access_token_hook"
-      # GOTRUE_HOOK_SEND_SMS_SECRETS: "v1,whsec_VGhpcyBpcyBhbiBleGFtcGxlIG9mIGEgc2hvcnRlciBCYXNlNjQgc3RyaW5n"
+      # Send-SMS hook — how a provider GoTrue has no native driver
+      # for (MSG91) is delivered: GoTrue POSTs the generated OTP to the panel,
+      # which holds that provider's credentials and calls its API. An enabled
+      # hook bypasses GOTRUE_SMS_PROVIDER entirely, so the two are never both
+      # in play. lib/provision/render.ts STRIPS these three keys when no
+      # hook-delivered provider is selected, so an instance not using one
+      # carries no hook config at all.
+      GOTRUE_HOOK_SEND_SMS_ENABLED: ${HOOK_SEND_SMS_ENABLED}
+      GOTRUE_HOOK_SEND_SMS_URI: ${HOOK_SEND_SMS_URI}
+      GOTRUE_HOOK_SEND_SMS_SECRETS: ${HOOK_SEND_SMS_SECRETS}
 
       # GOTRUE_HOOK_SEND_EMAIL_ENABLED: "false"
       # GOTRUE_HOOK_SEND_EMAIL_URI: "http://host.docker.internal:54321/functions/v1/email_sender"

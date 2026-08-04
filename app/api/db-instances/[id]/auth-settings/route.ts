@@ -67,6 +67,18 @@ function toDto(
     smtpPassConfigured: values.smtpPass !== DEFAULT_AUTH_SETTINGS.smtpPass,
     smtpSenderName: values.smtpSenderName,
     smtpAdminEmail: values.smtpAdminEmail,
+    smsProvider: values.smsProvider,
+    smsOtpExp: values.smsOtpExp,
+    smsOtpLength: values.smsOtpLength,
+    smsMaxFrequency: values.smsMaxFrequency,
+    smsTemplate: values.smsTemplate,
+    smsTwilioAccountSid: values.smsTwilioAccountSid,
+    smsTwilioAuthTokenConfigured: values.smsTwilioAuthToken !== "",
+    smsTwilioMessageServiceSid: values.smsTwilioMessageServiceSid,
+    smsMsg91AuthKeyConfigured: values.smsMsg91AuthKey !== "",
+    smsMsg91TemplateId: values.smsMsg91TemplateId,
+    smsMsg91SenderId: values.smsMsg91SenderId,
+    smsMsg91OtpVariable: values.smsMsg91OtpVariable,
     googleEnabled: values.googleEnabled,
     googleClientId: values.googleClientId,
     googleSecretConfigured: values.googleSecret !== "",
@@ -198,6 +210,28 @@ export const PATCH = withErrorHandling(async (req: Request, { params }: Ctx) => 
   if (body.smtpPass !== undefined) data.smtpPassEnc = sealBytes(body.smtpPass);
   if (body.smtpSenderName !== undefined) data.smtpSenderName = body.smtpSenderName;
   if (body.smtpAdminEmail !== undefined) data.smtpAdminEmail = body.smtpAdminEmail;
+  if (body.smsProvider !== undefined) data.smsProvider = body.smsProvider;
+  if (body.smsOtpExp !== undefined) data.smsOtpExp = body.smsOtpExp;
+  if (body.smsOtpLength !== undefined) data.smsOtpLength = body.smsOtpLength;
+  if (body.smsMaxFrequency !== undefined) data.smsMaxFrequency = body.smsMaxFrequency;
+  if (body.smsTemplate !== undefined) data.smsTemplate = body.smsTemplate;
+  if (body.smsTwilioAccountSid !== undefined) {
+    data.smsTwilioAccountSid = body.smsTwilioAccountSid;
+  }
+  if (body.smsTwilioAuthToken !== undefined) {
+    data.smsTwilioAuthTokenEnc = sealBytes(body.smsTwilioAuthToken);
+  }
+  if (body.smsTwilioMessageServiceSid !== undefined) {
+    data.smsTwilioMessageServiceSid = body.smsTwilioMessageServiceSid;
+  }
+  if (body.smsMsg91AuthKey !== undefined) {
+    data.smsMsg91AuthKeyEnc = sealBytes(body.smsMsg91AuthKey);
+  }
+  if (body.smsMsg91TemplateId !== undefined) data.smsMsg91TemplateId = body.smsMsg91TemplateId;
+  if (body.smsMsg91SenderId !== undefined) data.smsMsg91SenderId = body.smsMsg91SenderId;
+  if (body.smsMsg91OtpVariable !== undefined) {
+    data.smsMsg91OtpVariable = body.smsMsg91OtpVariable;
+  }
   if (body.googleEnabled !== undefined) data.googleEnabled = body.googleEnabled;
   if (body.googleClientId !== undefined) data.googleClientId = body.googleClientId;
   if (body.googleSecret !== undefined) data.googleSecretEnc = sealBytes(body.googleSecret);

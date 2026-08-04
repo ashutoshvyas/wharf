@@ -159,6 +159,19 @@ export function deriveAncillarySecrets(jwtSecret: string): AncillarySecrets {
     s3AccessKeyId: derive("s3_access_key_id", 32),
     s3AccessKeySecret: derive("s3_access_key_secret", 64),
     dashboardPassword: derive("dashboard_password", 32),
+    // Shared secret GoTrue signs its send-SMS hook calls with.
+    // Derived, not stored: the panel route that receives those calls
+    // re-derives it from the same jwtSecret to verify the signature, so
+    // there is no third copy to keep in sync or rotate separately.
+    //
+    // base64, not hex like the others: this one is rendered as
+    // `v1,whsec_<value>`, and GoTrue hands everything after `whsec_` to the
+    // standard-webhooks library, which base64-DECODES it to get the HMAC key.
+    smsHookSecret: createHmac("sha512", jwtSecret)
+      .update("wharf:sms_hook_secret")
+      .digest()
+      .subarray(0, 32)
+      .toString("base64"),
   };
 }
 
@@ -169,6 +182,7 @@ export interface AncillarySecrets {
   s3AccessKeyId: string;
   s3AccessKeySecret: string;
   dashboardPassword: string;
+  smsHookSecret: string;
 }
 
 /**

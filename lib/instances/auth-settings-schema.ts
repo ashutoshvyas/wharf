@@ -22,6 +22,7 @@
  * the stored value, but an explicitly empty one clears it.
  */
 import { z } from "zod";
+import { SMS_PROVIDERS } from "@/lib/provision/render";
 
 const NO_LINEBREAK_RE = /^[^\r\n]*$/;
 // `max` is a parameter rather than a chained .max() at the call site: zod
@@ -91,6 +92,30 @@ export const authSettingsUpdateSchema = z
     smtpSenderName: noLineBreak("smtpSenderName").optional(),
     smtpAdminEmail: noLineBreak("smtpAdminEmail").optional(),
 
+    // SMS. The secret fields follow the same "empty string = keep the
+    // stored value" convention as the OAuth secrets, stripped by the transform.
+    smsProvider: z.enum(SMS_PROVIDERS).optional(),
+    smsOtpExp: z.number().int().min(10).max(86_400).optional(),
+    // GoTrue clamps anything outside 6..10 back to 6, so reject it here where
+    // the operator can still see why rather than letting it be silently reset.
+    smsOtpLength: z.number().int().min(6).max(10).optional(),
+    // A Go duration literal, the unit being mandatory ("60" is not 60s).
+    smsMaxFrequency: noLineBreak("smsMaxFrequency", 32)
+      .regex(/^\d+(ns|us|ms|s|m|h)([\d.]+(ns|us|ms|s|m|h))*$/, "smsMaxFrequency must be a duration like 1m0s or 30s")
+      .optional(),
+    smsTemplate: noLineBreak("smsTemplate", 2048).optional(),
+    smsTwilioAccountSid: noLineBreak("smsTwilioAccountSid").optional(),
+    smsTwilioAuthToken: z.string().max(1024).optional(),
+    smsTwilioMessageServiceSid: noLineBreak("smsTwilioMessageServiceSid").optional(),
+    smsMsg91AuthKey: z.string().max(1024).optional(),
+    smsMsg91TemplateId: noLineBreak("smsMsg91TemplateId").optional(),
+    smsMsg91SenderId: noLineBreak("smsMsg91SenderId").optional(),
+    // Substituted into an MSG91 payload as a JSON key, so keep it to the
+    // identifier shape their templates actually use.
+    smsMsg91OtpVariable: noLineBreak("smsMsg91OtpVariable", 64)
+      .regex(/^[A-Za-z_][A-Za-z0-9_]*$/, "smsMsg91OtpVariable must be a plain identifier")
+      .optional(),
+
     googleEnabled: z.boolean().optional(),
     // A comma-separated list of client ids, not just one — GoTrue parses this
     // into a []string so native/One Tap clients can ride along with the web
@@ -132,13 +157,26 @@ export const authSettingsUpdateSchema = z
       seen.add(entry.flow);
     }
   })
-  .transform(({ smtpPass, googleSecret, githubSecret, azureSecret, appleSecret, ...rest }) => ({
-    ...rest,
-    ...(smtpPass ? { smtpPass } : {}),
-    ...(googleSecret ? { googleSecret } : {}),
-    ...(githubSecret ? { githubSecret } : {}),
-    ...(azureSecret ? { azureSecret } : {}),
-    ...(appleSecret ? { appleSecret } : {}),
-  }));
+  .transform(
+    ({
+      smtpPass,
+      googleSecret,
+      githubSecret,
+      azureSecret,
+      appleSecret,
+      smsTwilioAuthToken,
+      smsMsg91AuthKey,
+      ...rest
+    }) => ({
+      ...rest,
+      ...(smtpPass ? { smtpPass } : {}),
+      ...(googleSecret ? { googleSecret } : {}),
+      ...(githubSecret ? { githubSecret } : {}),
+      ...(azureSecret ? { azureSecret } : {}),
+      ...(appleSecret ? { appleSecret } : {}),
+      ...(smsTwilioAuthToken ? { smsTwilioAuthToken } : {}),
+      ...(smsMsg91AuthKey ? { smsMsg91AuthKey } : {}),
+    }),
+  );
 
 export type AuthSettingsUpdateInput = z.infer<typeof authSettingsUpdateSchema>;

@@ -100,6 +100,11 @@ const PUBLIC_PATHS = [
   // unauthenticated, the same category of exception as /api/auth/verify.
   // Only ever returns template HTML, never any other instance field.
   /^\/api\/db-instances\/[^/]+\/email-template\/[^/]+$/,
+  // Also called by GoTrue itself — the send-SMS hook, for providers
+  // it has no native driver for. Unauthenticated for the same reason as the
+  // route above, but NOT trusting the instance id: the route verifies a
+  // standard-webhooks signature before it will send anything.
+  /^\/api\/db-instances\/[^/]+\/sms-hook$/,
 ];
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);

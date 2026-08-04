@@ -167,6 +167,29 @@ model InstanceAuthSettings {
   smtpSenderName String? @map("smtp_sender_name")
   smtpAdminEmail String? @map("smtp_admin_email")
 
+  // SMS / phone OTP delivery. `smsProvider` is "" (none), "twilio"
+  // — a provider GoTrue speaks natively — or "msg91", which it does not:
+  // MSG91 is reached through GoTrue's send-SMS hook pointed back at this
+  // panel, so the two are mutually exclusive by construction (an enabled
+  // hook bypasses GOTRUE_SMS_PROVIDER entirely).
+  smsProvider     String? @map("sms_provider")
+  smsOtpExp       Int?    @map("sms_otp_exp")
+  smsOtpLength    Int?    @map("sms_otp_length")
+  smsMaxFrequency String? @map("sms_max_frequency")
+  smsTemplate     String? @map("sms_template")
+
+  smsTwilioAccountSid        String? @map("sms_twilio_account_sid")
+  smsTwilioAuthTokenEnc      Bytes?  @map("sms_twilio_auth_token_enc")
+  smsTwilioMessageServiceSid String? @map("sms_twilio_message_service_sid")
+
+  // MSG91's DLT-era fields: a flow/template id and the 6-character sender
+  // header registered against it, plus the template variable the OTP is
+  // substituted into (their templates name it themselves, so it varies).
+  smsMsg91AuthKeyEnc  Bytes?  @map("sms_msg91_auth_key_enc")
+  smsMsg91TemplateId  String? @map("sms_msg91_template_id")
+  smsMsg91SenderId    String? @map("sms_msg91_sender_id")
+  smsMsg91OtpVariable String? @map("sms_msg91_otp_variable")
+
   // OAuth providers — GOTRUE_EXTERNAL_* vars already exist (commented out)
   // in templates/supabase/docker-compose.yml.
   // `googleClientId` is a comma-separated list (GoTrue parses it into a

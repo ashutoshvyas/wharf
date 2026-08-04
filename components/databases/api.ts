@@ -96,6 +96,9 @@ export interface SlugAvailabilityDto {
  * configurable Auth (GoTrue) settings. Secret fields are never echoed —
  * only a `*Configured` boolean, same rule as InstanceSecretsDto.
  */
+/** Mirrors lib/provision/render.ts's SMS_PROVIDERS. */
+export type SmsProviderDto = "" | "twilio" | "msg91";
+
 export interface AuthSettingsDto {
   disableSignup: boolean;
   enableEmailSignup: boolean;
@@ -116,6 +119,20 @@ export interface AuthSettingsDto {
   smtpPassConfigured: boolean;
   smtpSenderName: string;
   smtpAdminEmail: string;
+  /** "" (none), "twilio", or "msg91" (delivered via the panel's send-SMS hook). */
+  smsProvider: SmsProviderDto;
+  smsOtpExp: number;
+  smsOtpLength: number;
+  /** A Go duration ("1m0s"), not a number of seconds. */
+  smsMaxFrequency: string;
+  smsTemplate: string;
+  smsTwilioAccountSid: string;
+  smsTwilioAuthTokenConfigured: boolean;
+  smsTwilioMessageServiceSid: string;
+  smsMsg91AuthKeyConfigured: boolean;
+  smsMsg91TemplateId: string;
+  smsMsg91SenderId: string;
+  smsMsg91OtpVariable: string;
   googleEnabled: boolean;
   /** Comma-separated: the web OAuth client plus any native/One Tap client ids. */
   googleClientId: string;
@@ -155,6 +172,18 @@ export interface AuthSettingsUpdatePayload {
   smtpPass?: string;
   smtpSenderName?: string;
   smtpAdminEmail?: string;
+  smsProvider?: SmsProviderDto;
+  smsOtpExp?: number;
+  smsOtpLength?: number;
+  smsMaxFrequency?: string;
+  smsTemplate?: string;
+  smsTwilioAccountSid?: string;
+  smsTwilioAuthToken?: string;
+  smsTwilioMessageServiceSid?: string;
+  smsMsg91AuthKey?: string;
+  smsMsg91TemplateId?: string;
+  smsMsg91SenderId?: string;
+  smsMsg91OtpVariable?: string;
   googleEnabled?: boolean;
   googleClientId?: string;
   googleSecret?: string;

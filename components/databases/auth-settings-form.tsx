@@ -35,6 +35,7 @@ import {
   type AuthSettingsDto,
   type AuthSettingsUpdatePayload,
   type InstanceDto,
+  type SmsProviderDto,
 } from "./api";
 
 type SettingsSection = "session" | "smtp" | "providers";
@@ -234,6 +235,18 @@ interface FormState {
   smtpPass: string;
   smtpSenderName: string;
   smtpAdminEmail: string;
+  smsProvider: SmsProviderDto;
+  smsOtpExp: string;
+  smsOtpLength: string;
+  smsMaxFrequency: string;
+  smsTemplate: string;
+  smsTwilioAccountSid: string;
+  smsTwilioAuthToken: string;
+  smsTwilioMessageServiceSid: string;
+  smsMsg91AuthKey: string;
+  smsMsg91TemplateId: string;
+  smsMsg91SenderId: string;
+  smsMsg91OtpVariable: string;
   googleEnabled: boolean;
   googleClientId: string;
   googleSecret: string;
@@ -270,6 +283,18 @@ function formFromDto(dto: AuthSettingsDto): FormState {
     smtpPass: "",
     smtpSenderName: dto.smtpSenderName,
     smtpAdminEmail: dto.smtpAdminEmail,
+    smsProvider: dto.smsProvider,
+    smsOtpExp: String(dto.smsOtpExp),
+    smsOtpLength: String(dto.smsOtpLength),
+    smsMaxFrequency: dto.smsMaxFrequency,
+    smsTemplate: dto.smsTemplate,
+    smsTwilioAccountSid: dto.smsTwilioAccountSid,
+    smsTwilioAuthToken: "",
+    smsTwilioMessageServiceSid: dto.smsTwilioMessageServiceSid,
+    smsMsg91AuthKey: "",
+    smsMsg91TemplateId: dto.smsMsg91TemplateId,
+    smsMsg91SenderId: dto.smsMsg91SenderId,
+    smsMsg91OtpVariable: dto.smsMsg91OtpVariable,
     googleEnabled: dto.googleEnabled,
     googleClientId: dto.googleClientId,
     googleSecret: "",
@@ -308,6 +333,18 @@ function toPayload(form: FormState): AuthSettingsUpdatePayload {
     ...(form.smtpPass ? { smtpPass: form.smtpPass } : {}),
     smtpSenderName: form.smtpSenderName,
     smtpAdminEmail: form.smtpAdminEmail,
+    smsProvider: form.smsProvider,
+    smsOtpExp: Number(form.smsOtpExp),
+    smsOtpLength: Number(form.smsOtpLength),
+    smsMaxFrequency: form.smsMaxFrequency.trim(),
+    smsTemplate: form.smsTemplate,
+    smsTwilioAccountSid: form.smsTwilioAccountSid.trim(),
+    ...(form.smsTwilioAuthToken ? { smsTwilioAuthToken: form.smsTwilioAuthToken } : {}),
+    smsTwilioMessageServiceSid: form.smsTwilioMessageServiceSid.trim(),
+    ...(form.smsMsg91AuthKey ? { smsMsg91AuthKey: form.smsMsg91AuthKey } : {}),
+    smsMsg91TemplateId: form.smsMsg91TemplateId.trim(),
+    smsMsg91SenderId: form.smsMsg91SenderId.trim(),
+    smsMsg91OtpVariable: form.smsMsg91OtpVariable.trim(),
     googleEnabled: form.googleEnabled,
     googleClientId: form.googleClientId,
     ...(form.googleSecret ? { googleSecret: form.googleSecret } : {}),
@@ -626,11 +663,199 @@ export function AuthSettingsForm({ instance, role }: { instance: InstanceDto; ro
                   <p className="mt-1 text-xs text-neutral-500">
                     On, a phone number is marked confirmed at sign-up without any code being
                     sent or checked — nothing proves the user controls that number. Off is
-                    the branch that sends a verification SMS, which needs an SMS provider
-                    (Twilio, MessageBird, ...). Those are not configurable here yet, so
-                    turning this off today leaves phone sign-up unable to complete.
+                    the branch that sends a verification SMS, which needs a provider below.
                   </p>
                 </div>
+
+                {!form.enablePhoneAutoconfirm && form.smsProvider === "" ? (
+                  <Alert variant="warning" title="No SMS provider selected">
+                    <p>
+                      Verification codes are switched on but nothing can deliver them, so
+                      phone sign-up will fail. Pick a provider below, or turn auto-confirm
+                      back on.
+                    </p>
+                  </Alert>
+                ) : null}
+
+                <Field
+                  label="SMS provider"
+                  hint="Twilio is delivered by the auth container directly. MSG91 has no driver in GoTrue, so this panel delivers it — the instance calls back here and WHARF sends the message."
+                >
+                  <select
+                    value={form.smsProvider}
+                    disabled={!canWrite}
+                    onChange={(e) =>
+                      setForm({ ...form, smsProvider: e.target.value as SmsProviderDto })
+                    }
+                    className={INPUT_CLASSES}
+                  >
+                    <option value="">None — no codes are sent</option>
+                    <option value="twilio">Twilio</option>
+                    <option value="msg91">MSG91</option>
+                  </select>
+                </Field>
+
+                {form.smsProvider === "twilio" ? (
+                  <>
+                    <Field label="Twilio account SID">
+                      <input
+                        value={form.smsTwilioAccountSid}
+                        disabled={!canWrite}
+                        onChange={(e) =>
+                          setForm({ ...form, smsTwilioAccountSid: e.target.value })
+                        }
+                        placeholder="AC..."
+                        className={INPUT_CLASSES}
+                      />
+                    </Field>
+                    <Field label="Twilio auth token">
+                      <input
+                        type="password"
+                        autoComplete="off"
+                        value={form.smsTwilioAuthToken}
+                        disabled={!canWrite}
+                        onChange={(e) =>
+                          setForm({ ...form, smsTwilioAuthToken: e.target.value })
+                        }
+                        placeholder={
+                          query.data.smsTwilioAuthTokenConfigured ? "(unchanged)" : ""
+                        }
+                        className={INPUT_CLASSES}
+                      />
+                    </Field>
+                    <Field
+                      label="Twilio message service SID"
+                      hint="The Messaging Service the codes are sent from, not a phone number."
+                    >
+                      <input
+                        value={form.smsTwilioMessageServiceSid}
+                        disabled={!canWrite}
+                        onChange={(e) =>
+                          setForm({ ...form, smsTwilioMessageServiceSid: e.target.value })
+                        }
+                        placeholder="MG..."
+                        className={INPUT_CLASSES}
+                      />
+                    </Field>
+                  </>
+                ) : null}
+
+                {form.smsProvider === "msg91" ? (
+                  <>
+                    <Field label="MSG91 auth key">
+                      <input
+                        type="password"
+                        autoComplete="off"
+                        value={form.smsMsg91AuthKey}
+                        disabled={!canWrite}
+                        onChange={(e) => setForm({ ...form, smsMsg91AuthKey: e.target.value })}
+                        placeholder={query.data.smsMsg91AuthKeyConfigured ? "(unchanged)" : ""}
+                        className={INPUT_CLASSES}
+                      />
+                    </Field>
+                    <Field
+                      label="MSG91 template (flow) ID"
+                      hint="The DLT-approved template the code is sent through. MSG91 composes the message from it — the SMS message template field below does not apply to MSG91."
+                    >
+                      <input
+                        value={form.smsMsg91TemplateId}
+                        disabled={!canWrite}
+                        onChange={(e) =>
+                          setForm({ ...form, smsMsg91TemplateId: e.target.value })
+                        }
+                        className={INPUT_CLASSES}
+                      />
+                    </Field>
+                    <Field
+                      label="MSG91 sender ID"
+                      hint="The registered 6-character header. Leave blank if the template already pins one."
+                    >
+                      <input
+                        value={form.smsMsg91SenderId}
+                        disabled={!canWrite}
+                        onChange={(e) => setForm({ ...form, smsMsg91SenderId: e.target.value })}
+                        placeholder="WHARFX"
+                        className={INPUT_CLASSES}
+                      />
+                    </Field>
+                    <Field
+                      label="OTP template variable"
+                      hint="The variable in your MSG91 template that the code is substituted into. Must match the template exactly, or the message arrives with an empty code."
+                    >
+                      <input
+                        value={form.smsMsg91OtpVariable}
+                        disabled={!canWrite}
+                        onChange={(e) =>
+                          setForm({ ...form, smsMsg91OtpVariable: e.target.value })
+                        }
+                        placeholder="OTP"
+                        className={INPUT_CLASSES}
+                      />
+                    </Field>
+                    <p className="text-xs text-neutral-500">
+                      MSG91 credentials stay in this panel and are never written to the
+                      instance. The instance calls WHARF to send each code, so codes stop
+                      going out while the panel is unreachable — Twilio, being native to the
+                      auth container, has no such dependency.
+                    </p>
+                  </>
+                ) : null}
+
+                {form.smsProvider !== "" ? (
+                  <>
+                    <Field
+                      label="Code length"
+                      hint="Between 6 and 10 digits."
+                    >
+                      <input
+                        type="number"
+                        min={6}
+                        max={10}
+                        value={form.smsOtpLength}
+                        disabled={!canWrite}
+                        onChange={(e) => setForm({ ...form, smsOtpLength: e.target.value })}
+                        className={INPUT_CLASSES}
+                      />
+                    </Field>
+                    <Field label="Code validity, in seconds">
+                      <input
+                        type="number"
+                        min={10}
+                        max={86_400}
+                        value={form.smsOtpExp}
+                        disabled={!canWrite}
+                        onChange={(e) => setForm({ ...form, smsOtpExp: e.target.value })}
+                        className={INPUT_CLASSES}
+                      />
+                    </Field>
+                    <Field
+                      label="Minimum gap between messages"
+                      hint="A Go duration such as 1m0s or 30s — the unit is required."
+                    >
+                      <input
+                        value={form.smsMaxFrequency}
+                        disabled={!canWrite}
+                        onChange={(e) => setForm({ ...form, smsMaxFrequency: e.target.value })}
+                        placeholder="1m0s"
+                        className={INPUT_CLASSES}
+                      />
+                    </Field>
+                    {form.smsProvider !== "msg91" ? (
+                      <Field
+                        label="SMS message template"
+                        hint="Use {{ .Code }} where the code should appear. Leave blank for GoTrue's default."
+                      >
+                        <input
+                          value={form.smsTemplate}
+                          disabled={!canWrite}
+                          onChange={(e) => setForm({ ...form, smsTemplate: e.target.value })}
+                          placeholder="Your code is {{ .Code }}"
+                          className={INPUT_CLASSES}
+                        />
+                      </Field>
+                    ) : null}
+                  </>
+                ) : null}
               </ProviderRow>
 
               <ProviderRow
