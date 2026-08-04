@@ -104,6 +104,10 @@ export interface AuthSettingsDto {
   enableAnonymousUsers: boolean;
   jwtExpirySeconds: number;
   additionalRedirectUrls: string;
+  /** Empty = fall back to this instance's own API origin. */
+  siteUrl: string;
+  /** Empty = fall back to `<api origin>/auth/v1/callback`. */
+  oauthCallbackUrl: string;
   smtpHost: string;
   smtpPort: number;
   smtpUser: string;
@@ -111,8 +115,11 @@ export interface AuthSettingsDto {
   smtpSenderName: string;
   smtpAdminEmail: string;
   googleEnabled: boolean;
+  /** Comma-separated: the web OAuth client plus any native/One Tap client ids. */
   googleClientId: string;
   googleSecretConfigured: boolean;
+  googleSkipNonceCheck: boolean;
+  googleEmailOptional: boolean;
   githubEnabled: boolean;
   githubClientId: string;
   githubSecretConfigured: boolean;
@@ -123,6 +130,7 @@ export interface AuthSettingsDto {
   /** A Services ID (comma-separated list allowed), not a plain client id. */
   appleClientId: string;
   appleSecretConfigured: boolean;
+  appleEmailOptional: boolean;
   emailTemplates: EmailTemplateSummaryDto[];
 }
 
@@ -135,6 +143,8 @@ export interface AuthSettingsUpdatePayload {
   enableAnonymousUsers?: boolean;
   jwtExpirySeconds?: number;
   additionalRedirectUrls?: string;
+  siteUrl?: string;
+  oauthCallbackUrl?: string;
   smtpHost?: string;
   smtpPort?: number;
   smtpUser?: string;
@@ -144,6 +154,8 @@ export interface AuthSettingsUpdatePayload {
   googleEnabled?: boolean;
   googleClientId?: string;
   googleSecret?: string;
+  googleSkipNonceCheck?: boolean;
+  googleEmailOptional?: boolean;
   githubEnabled?: boolean;
   githubClientId?: string;
   githubSecret?: string;
@@ -154,6 +166,7 @@ export interface AuthSettingsUpdatePayload {
   appleClientId?: string;
   /** A developer-generated ES256 JWT Apple caps at 6 months, not a long-lived secret. */
   appleSecret?: string;
+  appleEmailOptional?: boolean;
   emailTemplates?: EmailTemplateUpdateEntry[];
 }
 

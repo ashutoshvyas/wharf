@@ -39,6 +39,8 @@ describe("authSettingsUpdateSchema", () => {
     "githubClientId",
     "azureClientId",
     "appleClientId",
+    "siteUrl",
+    "oauthCallbackUrl",
   ])("rejects a line break in %s (.env injection guard)", (field) => {
     expect(
       authSettingsUpdateSchema.safeParse({ [field]: "line1\nEVIL=1" }).success,
@@ -46,6 +48,22 @@ describe("authSettingsUpdateSchema", () => {
     expect(
       authSettingsUpdateSchema.safeParse({ [field]: "line1\rEVIL=1" }).success,
     ).toBe(false);
+  });
+
+  // Both URLs break sign-in silently when malformed — the damage shows up at
+  // the OAuth provider or as a dead post-login redirect, nowhere near the form.
+  it.each(["siteUrl", "oauthCallbackUrl"])("requires %s to be an absolute URL", (field) => {
+    for (const good of [
+      "",
+      "https://app.example.com",
+      "https://app.example.com/auth/v1/callback",
+      "http://localhost:3000",
+    ]) {
+      expect(authSettingsUpdateSchema.safeParse({ [field]: good }).success).toBe(true);
+    }
+    for (const bad of ["app.example.com", "/auth/v1/callback", "ftp://app.example.com", "   "]) {
+      expect(authSettingsUpdateSchema.safeParse({ [field]: bad }).success).toBe(false);
+    }
   });
 
   // Apple's "secret" is an ES256 JWT the developer signs themselves, not a

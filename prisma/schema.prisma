@@ -138,6 +138,18 @@ model InstanceAuthSettings {
   jwtExpirySeconds       Int     @default(3600) @map("jwt_expiry_seconds")
   additionalRedirectUrls String? @map("additional_redirect_urls")
 
+  // Where the web app this instance backs actually lives. Null/empty on both
+  // means "derive from the instance's own API origin" — exactly what
+  // lib/provision/render.ts hardcoded before these existed.
+  //
+  // `siteUrl` is GoTrue's default post-auth landing URL (sign-in, recovery,
+  // confirmation). `oauthCallbackUrl` is the address OAuth providers hand the
+  // browser back to; it must resolve to THIS instance's GoTrue, so it only
+  // ever differs from the derived value when a custom domain fronts the
+  // instance and proxies /auth/v1/* through to it.
+  siteUrl          String? @map("site_url")
+  oauthCallbackUrl String? @map("oauth_callback_url")
+
   // SMTP — templates/supabase/.env.template ships a fake, non-resolving
   // relay by default (SMTP_HOST=supabase-mail); these let an operator point
   // at a real one.
@@ -150,9 +162,16 @@ model InstanceAuthSettings {
 
   // OAuth providers — GOTRUE_EXTERNAL_* vars already exist (commented out)
   // in templates/supabase/docker-compose.yml.
-  googleEnabled   Boolean @default(false) @map("google_enabled")
-  googleClientId  String? @map("google_client_id")
-  googleSecretEnc Bytes?  @map("google_secret_enc")
+  // `googleClientId` is a comma-separated list (GoTrue parses it into a
+  // []string): the web OAuth client plus any native/One Tap client ids that
+  // issue ID tokens for this project. `googleSkipNonceCheck` relaxes OIDC
+  // replay protection for native SDKs that don't expose the nonce, and
+  // `googleEmailOptional` admits a user the provider returns no email for.
+  googleEnabled        Boolean @default(false) @map("google_enabled")
+  googleClientId       String? @map("google_client_id")
+  googleSecretEnc      Bytes?  @map("google_secret_enc")
+  googleSkipNonceCheck Boolean @default(false) @map("google_skip_nonce_check")
+  googleEmailOptional  Boolean @default(false) @map("google_email_optional")
 
   githubEnabled   Boolean @default(false) @map("github_enabled")
   githubClientId  String? @map("github_client_id")
@@ -168,9 +187,13 @@ model InstanceAuthSettings {
   // developer-generated ES256 JWT that Apple caps at 6 months — not a
   // long-lived secret like Google's. Stored identically regardless; the UI
   // carries the explanation.
-  appleEnabled   Boolean @default(false) @map("apple_enabled")
-  appleClientId  String? @map("apple_client_id")
-  appleSecretEnc Bytes?  @map("apple_secret_enc")
+  // `appleEmailOptional` earns its keep more than the others': Apple relays a
+  // real address only on first consent, and "Hide My Email" substitutes a
+  // private relay one.
+  appleEnabled       Boolean @default(false) @map("apple_enabled")
+  appleClientId      String? @map("apple_client_id")
+  appleSecretEnc     Bytes?  @map("apple_secret_enc")
+  appleEmailOptional Boolean @default(false) @map("apple_email_optional")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -199,7 +222,6 @@ enum EmailTemplateFlow {
  * InstanceAuthSettings because the shape is a list (one row per configured
  * flow), not a flat settings bag — a flow with no row means "use GoTrue's
  * own built-in default", not "explicitly reset to blank".
- *
  * `bodyHtml` is never written into the instance's .env (GoTrue fetches it
  * over HTTP from GET /api/db-instances/:id/email-template/:flow — a public
  * route, see that route's doc comment) and so needs no newline restriction,
@@ -229,7 +251,6 @@ model InstanceEmailTemplate {
  * a Lakekeeper Iceberg REST catalog, both instance-local, no public route)
  * — off by default because, unlike Vector buckets, these are real extra
  * processes/RAM/disk per instance.
- *
  * No secret columns here: MinIO's root password, the Iceberg catalog's
  * static bearer token, and Lakekeeper's own at-rest encryption key are all
  * derived from this instance's existing jwtSecret via HMAC, the same
@@ -238,7 +259,6 @@ model InstanceEmailTemplate {
  * fresh independently-stored secret would provide no real extra rotation
  * ability (anyone with jwtSecret already holds the service_role key, i.e.
  * full API/DB access), so deriving keeps this model down to a pure toggle.
- *
  * Lakekeeper runs in its own documented "Unsecured" mode (internal-network-
  * only trust boundary, same as this instance's own `db` Postgres port
  * today) rather than real OAuth, so the derived catalog token is a static
@@ -259,7 +279,6 @@ model InstanceAnalyticsSettings {
 
 /**
  * Where a live-database sync pulls FROM.
- *
  * `supabase` means a hosted Supabase project: the Postgres columns below are
  * still the ones that carry the dump (there is no dump API), `projectUrl` +
  * `serviceRoleKeyEnc` exist only so storage OBJECTS can be copied over the
@@ -274,17 +293,14 @@ enum SyncSourceKind {
 /**
  * Saved source for "sync from a live database" — the second source
  * for the restore engine, alongside an uploaded dump file.
- *
  * 1:1 with the instance and stored (rather than used once and discarded) so a
  * migration can be re-run on demand without re-typing credentials; that is
  * the whole point of calling it a sync. Same discrete-`*Enc`-column
  * convention as InstanceAuthSettings — never a JSON secret blob.
- *
  * The credentials here grant full READ of the source project, so every route
  * that touches this row is admin-only (`instance.restore` in lib/rbac.ts) and
  * neither secret is ever echoed back on a read — only a `*Configured`
  * boolean, the same rule as InstanceSecretsDto.
- *
  * `pgHost`/`pgUser`/`pgDatabase`/`pgSslMode` are re-validated against a
  * conservative charset at the API boundary (lib/instances/sync-source-schema.ts)
  * because they are interpolated into a connection string that reaches a remote

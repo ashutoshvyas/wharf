@@ -25,6 +25,7 @@ import { can, type Role } from "@/lib/rbac";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { MonoField } from "@/components/ui/mono-field";
 import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/cn";
 import { SettingsHeading, SettingsNavItem, SettingsShell } from "./settings-shell";
@@ -223,6 +224,8 @@ interface FormState {
   enableAnonymousUsers: boolean;
   jwtExpirySeconds: string;
   additionalRedirectUrls: string;
+  siteUrl: string;
+  oauthCallbackUrl: string;
   smtpHost: string;
   smtpPort: string;
   smtpUser: string;
@@ -232,6 +235,8 @@ interface FormState {
   googleEnabled: boolean;
   googleClientId: string;
   googleSecret: string;
+  googleSkipNonceCheck: boolean;
+  googleEmailOptional: boolean;
   githubEnabled: boolean;
   githubClientId: string;
   githubSecret: string;
@@ -241,6 +246,7 @@ interface FormState {
   appleEnabled: boolean;
   appleClientId: string;
   appleSecret: string;
+  appleEmailOptional: boolean;
 }
 
 function formFromDto(dto: AuthSettingsDto): FormState {
@@ -252,6 +258,8 @@ function formFromDto(dto: AuthSettingsDto): FormState {
     enableAnonymousUsers: dto.enableAnonymousUsers,
     jwtExpirySeconds: String(dto.jwtExpirySeconds),
     additionalRedirectUrls: dto.additionalRedirectUrls,
+    siteUrl: dto.siteUrl,
+    oauthCallbackUrl: dto.oauthCallbackUrl,
     smtpHost: dto.smtpHost,
     smtpPort: String(dto.smtpPort),
     smtpUser: dto.smtpUser,
@@ -261,6 +269,8 @@ function formFromDto(dto: AuthSettingsDto): FormState {
     googleEnabled: dto.googleEnabled,
     googleClientId: dto.googleClientId,
     googleSecret: "",
+    googleSkipNonceCheck: dto.googleSkipNonceCheck,
+    googleEmailOptional: dto.googleEmailOptional,
     githubEnabled: dto.githubEnabled,
     githubClientId: dto.githubClientId,
     githubSecret: "",
@@ -270,6 +280,7 @@ function formFromDto(dto: AuthSettingsDto): FormState {
     appleEnabled: dto.appleEnabled,
     appleClientId: dto.appleClientId,
     appleSecret: "",
+    appleEmailOptional: dto.appleEmailOptional,
   };
 }
 
@@ -282,6 +293,9 @@ function toPayload(form: FormState): AuthSettingsUpdatePayload {
     enableAnonymousUsers: form.enableAnonymousUsers,
     jwtExpirySeconds: Number(form.jwtExpirySeconds),
     additionalRedirectUrls: form.additionalRedirectUrls,
+    // Trimmed, so a stray space can't turn "unset" into a URL GoTrue rejects.
+    siteUrl: form.siteUrl.trim(),
+    oauthCallbackUrl: form.oauthCallbackUrl.trim(),
     smtpHost: form.smtpHost,
     smtpPort: Number(form.smtpPort),
     smtpUser: form.smtpUser,
@@ -291,6 +305,8 @@ function toPayload(form: FormState): AuthSettingsUpdatePayload {
     googleEnabled: form.googleEnabled,
     googleClientId: form.googleClientId,
     ...(form.googleSecret ? { googleSecret: form.googleSecret } : {}),
+    googleSkipNonceCheck: form.googleSkipNonceCheck,
+    googleEmailOptional: form.googleEmailOptional,
     githubEnabled: form.githubEnabled,
     githubClientId: form.githubClientId,
     ...(form.githubSecret ? { githubSecret: form.githubSecret } : {}),
@@ -300,6 +316,7 @@ function toPayload(form: FormState): AuthSettingsUpdatePayload {
     appleEnabled: form.appleEnabled,
     appleClientId: form.appleClientId,
     ...(form.appleSecret ? { appleSecret: form.appleSecret } : {}),
+    appleEmailOptional: form.appleEmailOptional,
   };
 }
 
@@ -308,6 +325,11 @@ export function AuthSettingsForm({ instance, role }: { instance: InstanceDto; ro
   const queryClient = useQueryClient();
   const canWrite = can(role, "instance.auth-settings.write");
   const queryKey = ["auth-settings", instance.id];
+  // What an empty Site URL / callback override falls back to. Mirrors
+  // lib/provision/render.ts, which builds API_EXTERNAL_URL the same way and
+  // resolves both fallbacks server-side — these are for display only.
+  const defaultSiteUrl = `https://${instance.apiSubdomain}`;
+  const defaultCallbackUrl = `${defaultSiteUrl}/auth/v1/callback`;
 
   const query = useQuery({
     queryKey,
@@ -368,6 +390,11 @@ export function AuthSettingsForm({ instance, role }: { instance: InstanceDto; ro
     );
   }
 
+  // What to actually paste into each provider's console: the override when
+  // one is set, the derived default otherwise. Reads from form state rather
+  // than the DTO so it tracks the override input live, before a save.
+  const effectiveCallbackUrl = form.oauthCallbackUrl.trim() || defaultCallbackUrl;
+
   return (
     <form onSubmit={handleSubmit} className="h-full">
       <SettingsShell
@@ -424,8 +451,21 @@ export function AuthSettingsForm({ instance, role }: { instance: InstanceDto; ro
               />
             </Field>
             <Field
+              label="Site URL"
+              hint="The web app this database backs. Where GoTrue sends a user after sign-in, password recovery and email confirmation, and the base for links in its emails. Leave blank to use this instance's own API origin."
+            >
+              <input
+                type="url"
+                value={form.siteUrl}
+                disabled={!canWrite}
+                onChange={(e) => setForm({ ...form, siteUrl: e.target.value })}
+                placeholder={defaultSiteUrl}
+                className={INPUT_CLASSES}
+              />
+            </Field>
+            <Field
               label="Additional redirect URLs"
-              hint="Comma-separated. Extra URLs GoTrue will allow redirecting to after auth, beyond this instance's own origin."
+              hint="Comma-separated. Extra URLs GoTrue will allow redirecting to after auth, beyond the Site URL above."
             >
               <input
                 value={form.additionalRedirectUrls}
@@ -508,6 +548,21 @@ export function AuthSettingsForm({ instance, role }: { instance: InstanceDto; ro
               title="Providers"
               description="Authenticate your users through a suite of providers and login methods."
             />
+            <div className="mb-4">
+              <Field
+                label="OAuth callback URL override"
+                hint="Shared by every provider below. Leave blank unless a custom domain fronts this instance and proxies /auth/v1/* through to it — this address must reach this instance's own auth container, not your web app. Use Site URL for where users land after signing in."
+              >
+                <input
+                  type="url"
+                  value={form.oauthCallbackUrl}
+                  disabled={!canWrite}
+                  onChange={(e) => setForm({ ...form, oauthCallbackUrl: e.target.value })}
+                  placeholder={defaultCallbackUrl}
+                  className={INPUT_CLASSES}
+                />
+              </Field>
+            </div>
             <div className="overflow-hidden rounded-[10px] border border-neutral-200 bg-white">
               <ProviderRow
                 icon={<Mail size={17} strokeWidth={1.75} />}
@@ -563,17 +618,21 @@ export function AuthSettingsForm({ instance, role }: { instance: InstanceDto; ro
                   disabled={!canWrite}
                   onChange={(v) => setForm({ ...form, googleEnabled: v })}
                 />
-                <Field label="Client ID">
+                <Field
+                  label="Client IDs"
+                  hint="Comma-separate to allow native (Android/iOS), One Tap and Chrome-extension client ids alongside the web one."
+                >
                   <input
                     value={form.googleClientId}
                     disabled={!canWrite}
                     onChange={(e) => setForm({ ...form, googleClientId: e.target.value })}
+                    placeholder="000000000000-xxxx.apps.googleusercontent.com"
                     className={INPUT_CLASSES}
                   />
                 </Field>
                 <Field
                   label="Client secret"
-                  hint="Register an OAuth app with this instance's API URL + /callback as the redirect URI."
+                  hint="Used by the web OAuth flow. Native ID-token sign-in doesn't need one."
                 >
                   <input
                     type="password"
@@ -585,6 +644,37 @@ export function AuthSettingsForm({ instance, role }: { instance: InstanceDto; ro
                     className={INPUT_CLASSES}
                   />
                 </Field>
+                <div>
+                  <Toggle
+                    label="Skip nonce checks"
+                    checked={form.googleSkipNonceCheck}
+                    disabled={!canWrite}
+                    onChange={(v) => setForm({ ...form, googleSkipNonceCheck: v })}
+                  />
+                  <p className="mt-1 text-xs text-neutral-500">
+                    Accepts ID tokens carrying any nonce. Less secure — it removes a replay
+                    protection — but some native SDKs (notably on iOS) don&apos;t expose the
+                    nonce they signed with.
+                  </p>
+                </div>
+                <div>
+                  <Toggle
+                    label="Allow users without an email"
+                    checked={form.googleEmailOptional}
+                    disabled={!canWrite}
+                    onChange={(v) => setForm({ ...form, googleEmailOptional: v })}
+                  />
+                  <p className="mt-1 text-xs text-neutral-500">
+                    Lets sign-in succeed when Google returns no email address. Off means such
+                    an attempt is rejected.
+                  </p>
+                </div>
+                <MonoField label="Callback URL (for OAuth)" value={effectiveCallbackUrl} />
+                <p className="-mt-2 text-xs text-neutral-500">
+                  Add this as an Authorized redirect URI on the Google Cloud OAuth client.
+                  It must match exactly, or Google rejects the flow with
+                  redirect_uri_mismatch.
+                </p>
               </ProviderRow>
 
               <ProviderRow
@@ -610,7 +700,7 @@ export function AuthSettingsForm({ instance, role }: { instance: InstanceDto; ro
                 </Field>
                 <Field
                   label="Client secret"
-                  hint="Register an OAuth app with this instance's API URL + /callback as the redirect URI."
+                  hint="Register an OAuth app with this instance's callback URL (below) as the redirect URI."
                 >
                   <input
                     type="password"
@@ -647,7 +737,7 @@ export function AuthSettingsForm({ instance, role }: { instance: InstanceDto; ro
                 </Field>
                 <Field
                   label="Client secret"
-                  hint="Register an OAuth app with this instance's API URL + /callback as the redirect URI."
+                  hint="Register an OAuth app with this instance's callback URL (below) as the redirect URI."
                 >
                   <input
                     type="password"
@@ -675,7 +765,7 @@ export function AuthSettingsForm({ instance, role }: { instance: InstanceDto; ro
                   onChange={(v) => setForm({ ...form, appleEnabled: v })}
                 />
                 <Field
-                  label="Services ID"
+                  label="Client IDs (Services ID)"
                   hint="Apple's equivalent of a client ID, e.g. com.example.app.web. Comma-separate to add a native app's bundle ID alongside it."
                 >
                   <input
@@ -687,8 +777,8 @@ export function AuthSettingsForm({ instance, role }: { instance: InstanceDto; ro
                   />
                 </Field>
                 <Field
-                  label="Client secret (generated JWT)"
-                  hint="Not a secret Apple hands you — a JWT you sign yourself with your .p8 key. Apple caps it at 6 months, so it expires and has to be regenerated and re-saved here. Add this instance's API URL + /callback as a Return URL on the Services ID."
+                  label="Secret key (generated JWT)"
+                  hint="Not a secret Apple hands you — a JWT you sign yourself with your .p8 key. Apple caps it at 6 months, so it expires and has to be regenerated and re-saved here, or web sign-in stops working."
                 >
                   <input
                     type="password"
@@ -700,6 +790,24 @@ export function AuthSettingsForm({ instance, role }: { instance: InstanceDto; ro
                     className={INPUT_CLASSES}
                   />
                 </Field>
+                <div>
+                  <Toggle
+                    label="Allow users without an email"
+                    checked={form.appleEmailOptional}
+                    disabled={!canWrite}
+                    onChange={(v) => setForm({ ...form, appleEmailOptional: v })}
+                  />
+                  <p className="mt-1 text-xs text-neutral-500">
+                    Worth enabling for Apple specifically: it releases an email only on the
+                    user&apos;s first consent, and &quot;Hide My Email&quot; substitutes a
+                    private relay address.
+                  </p>
+                </div>
+                <MonoField label="Callback URL (for OAuth)" value={effectiveCallbackUrl} />
+                <p className="-mt-2 text-xs text-neutral-500">
+                  Register this as a Return URL on the Services ID in the Apple Developer
+                  Center.
+                </p>
               </ProviderRow>
             </div>
           </div>

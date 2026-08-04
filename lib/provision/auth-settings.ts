@@ -49,6 +49,8 @@ export function decryptAuthSettings(row: InstanceAuthSettings | null): AuthSetti
     enableAnonymousUsers: row.enableAnonymousUsers,
     jwtExpirySeconds: row.jwtExpirySeconds,
     additionalRedirectUrls: row.additionalRedirectUrls ?? DEFAULT_AUTH_SETTINGS.additionalRedirectUrls,
+    siteUrl: row.siteUrl ?? DEFAULT_AUTH_SETTINGS.siteUrl,
+    oauthCallbackUrl: row.oauthCallbackUrl ?? DEFAULT_AUTH_SETTINGS.oauthCallbackUrl,
     smtpHost: row.smtpHost ?? DEFAULT_AUTH_SETTINGS.smtpHost,
     smtpPort: row.smtpPort ?? DEFAULT_AUTH_SETTINGS.smtpPort,
     smtpUser: row.smtpUser ?? DEFAULT_AUTH_SETTINGS.smtpUser,
@@ -58,6 +60,8 @@ export function decryptAuthSettings(row: InstanceAuthSettings | null): AuthSetti
     googleEnabled: row.googleEnabled,
     googleClientId: row.googleClientId ?? DEFAULT_AUTH_SETTINGS.googleClientId,
     googleSecret: row.googleSecretEnc ? open(row.googleSecretEnc) : DEFAULT_AUTH_SETTINGS.googleSecret,
+    googleSkipNonceCheck: row.googleSkipNonceCheck,
+    googleEmailOptional: row.googleEmailOptional,
     githubEnabled: row.githubEnabled,
     githubClientId: row.githubClientId ?? DEFAULT_AUTH_SETTINGS.githubClientId,
     githubSecret: row.githubSecretEnc ? open(row.githubSecretEnc) : DEFAULT_AUTH_SETTINGS.githubSecret,
@@ -67,6 +71,7 @@ export function decryptAuthSettings(row: InstanceAuthSettings | null): AuthSetti
     appleEnabled: row.appleEnabled,
     appleClientId: row.appleClientId ?? DEFAULT_AUTH_SETTINGS.appleClientId,
     appleSecret: row.appleSecretEnc ? open(row.appleSecretEnc) : DEFAULT_AUTH_SETTINGS.appleSecret,
+    appleEmailOptional: row.appleEmailOptional,
   };
 }
 

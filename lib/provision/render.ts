@@ -146,6 +146,14 @@ export interface AuthSettingsValues {
   enableAnonymousUsers: boolean;
   jwtExpirySeconds: number;
   additionalRedirectUrls: string;
+  /** GoTrue's default post-auth landing URL. Empty = the instance's own API origin. */
+  siteUrl: string;
+  /**
+   * What OAuth providers redirect back to. Empty = <api origin>/auth/v1/callback.
+   * Only set when a custom domain fronts this instance — it must still reach
+   * THIS instance's GoTrue, not the web app.
+   */
+  oauthCallbackUrl: string;
   smtpHost: string;
   smtpPort: number;
   smtpUser: string;
@@ -153,8 +161,13 @@ export interface AuthSettingsValues {
   smtpSenderName: string;
   smtpAdminEmail: string;
   googleEnabled: boolean;
+  /** Comma-separated: the web OAuth client plus any native/One Tap client ids. */
   googleClientId: string;
   googleSecret: string;
+  /** Relaxes OIDC replay protection for native SDKs that don't expose the nonce. */
+  googleSkipNonceCheck: boolean;
+  /** Admits a user the provider returned no email address for. */
+  googleEmailOptional: boolean;
   githubEnabled: boolean;
   githubClientId: string;
   githubSecret: string;
@@ -166,6 +179,8 @@ export interface AuthSettingsValues {
   appleClientId: string;
   /** A developer-generated ES256 JWT Apple caps at 6 months, not a long-lived secret. */
   appleSecret: string;
+  /** Apple relays a real address only on first consent; "Hide My Email" gives a relay one. */
+  appleEmailOptional: boolean;
 }
 
 /** Exactly what .env.template hardcoded before unchanged behavior when unset. */
@@ -177,6 +192,8 @@ export const DEFAULT_AUTH_SETTINGS: AuthSettingsValues = {
   enableAnonymousUsers: false,
   jwtExpirySeconds: 3600,
   additionalRedirectUrls: "",
+  siteUrl: "",
+  oauthCallbackUrl: "",
   smtpHost: "supabase-mail",
   smtpPort: 2500,
   smtpUser: "fake_mail_user",
@@ -186,6 +203,8 @@ export const DEFAULT_AUTH_SETTINGS: AuthSettingsValues = {
   googleEnabled: false,
   googleClientId: "",
   googleSecret: "",
+  googleSkipNonceCheck: false,
+  googleEmailOptional: false,
   githubEnabled: false,
   githubClientId: "",
   githubSecret: "",
@@ -195,6 +214,7 @@ export const DEFAULT_AUTH_SETTINGS: AuthSettingsValues = {
   appleEnabled: false,
   appleClientId: "",
   appleSecret: "",
+  appleEmailOptional: false,
 };
 
 /** Plain shape of one instance's Analytics-buckets toggle. */
@@ -477,6 +497,12 @@ async function renderEnv(
     ENABLE_ANONYMOUS_USERS: bool(auth.enableAnonymousUsers),
     JWT_EXPIRY: String(auth.jwtExpirySeconds),
     ADDITIONAL_REDIRECT_URLS: auth.additionalRedirectUrls,
+    // Both override the API-origin default set in `values` above. Falling back
+    // rather than storing the derived value keeps an instance's URLs correct
+    // if its subdomain ever changes, and keeps an unconfigured instance
+    // rendering byte-identical output to before these settings existed.
+    SITE_URL: auth.siteUrl || apiUrl,
+    OAUTH_CALLBACK_URL: auth.oauthCallbackUrl || `${apiUrl}/auth/v1/callback`,
     SMTP_HOST: auth.smtpHost,
     SMTP_PORT: String(auth.smtpPort),
     SMTP_USER: auth.smtpUser,
@@ -486,6 +512,8 @@ async function renderEnv(
     GOOGLE_ENABLED: bool(auth.googleEnabled),
     GOOGLE_CLIENT_ID: auth.googleClientId,
     GOOGLE_SECRET: auth.googleSecret,
+    GOOGLE_SKIP_NONCE_CHECK: bool(auth.googleSkipNonceCheck),
+    GOOGLE_EMAIL_OPTIONAL: bool(auth.googleEmailOptional),
     GITHUB_ENABLED: bool(auth.githubEnabled),
     GITHUB_CLIENT_ID: auth.githubClientId,
     GITHUB_SECRET: auth.githubSecret,
@@ -495,6 +523,7 @@ async function renderEnv(
     APPLE_ENABLED: bool(auth.appleEnabled),
     APPLE_CLIENT_ID: auth.appleClientId,
     APPLE_SECRET: auth.appleSecret,
+    APPLE_EMAIL_OPTIONAL: bool(auth.appleEmailOptional),
   });
 
   // per-flow email subject/template overrides. A flow with no entry

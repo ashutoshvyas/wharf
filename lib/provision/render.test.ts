@@ -10,6 +10,7 @@ import {
 } from "@/lib/bootstrap/constants";
 import { deriveAnalyticsSecrets, deriveAncillarySecrets, type InstanceSecrets } from "./secrets";
 import {
+  DEFAULT_AUTH_SETTINGS,
   kongLabels,
   renderInstanceCompose,
   serviceNetworkNames,
@@ -497,11 +498,14 @@ describe("renderInstanceCompose — Auth settings", () => {
     expect(envValue(envFile, "GOOGLE_ENABLED")).toBe("false");
     expect(envValue(envFile, "GOOGLE_CLIENT_ID")).toBe("");
     expect(envValue(envFile, "GOOGLE_SECRET")).toBe("");
+    expect(envValue(envFile, "GOOGLE_SKIP_NONCE_CHECK")).toBe("false");
+    expect(envValue(envFile, "GOOGLE_EMAIL_OPTIONAL")).toBe("false");
     expect(envValue(envFile, "GITHUB_ENABLED")).toBe("false");
     expect(envValue(envFile, "AZURE_ENABLED")).toBe("false");
     expect(envValue(envFile, "APPLE_ENABLED")).toBe("false");
     expect(envValue(envFile, "APPLE_CLIENT_ID")).toBe("");
     expect(envValue(envFile, "APPLE_SECRET")).toBe("");
+    expect(envValue(envFile, "APPLE_EMAIL_OPTIONAL")).toBe("false");
   });
 
   it("substitutes every provided Auth setting", async () => {
@@ -514,6 +518,8 @@ describe("renderInstanceCompose — Auth settings", () => {
         enableAnonymousUsers: true,
         jwtExpirySeconds: 7200,
         additionalRedirectUrls: "https://clienta.example.com/callback",
+        siteUrl: "https://clienta.example.com",
+        oauthCallbackUrl: "",
         smtpHost: "smtp.sendgrid.net",
         smtpPort: 587,
         smtpUser: "apikey",
@@ -521,8 +527,12 @@ describe("renderInstanceCompose — Auth settings", () => {
         smtpSenderName: "Client A",
         smtpAdminEmail: "ops@clienta.example.com",
         googleEnabled: true,
-        googleClientId: "google-client-id.apps.googleusercontent.com",
+        // Comma-separated: GoTrue parses this into a []string, so a native
+        // client id can ride along with the web one.
+        googleClientId: "google-client-id.apps.googleusercontent.com,android-client-id",
         googleSecret: "google-secret-value",
+        googleSkipNonceCheck: true,
+        googleEmailOptional: true,
         githubEnabled: true,
         githubClientId: "github-client-id",
         githubSecret: "github-secret-value",
@@ -534,6 +544,7 @@ describe("renderInstanceCompose — Auth settings", () => {
         // comma-separated list so a native bundle id can ride along.
         appleClientId: "com.example.app.web,com.example.app",
         appleSecret: "apple.generated.jwt",
+        appleEmailOptional: true,
       },
     });
 
@@ -546,6 +557,11 @@ describe("renderInstanceCompose — Auth settings", () => {
     expect(envValue(envFile, "ADDITIONAL_REDIRECT_URLS")).toBe(
       "https://clienta.example.com/callback",
     );
+    expect(envValue(envFile, "SITE_URL")).toBe("https://clienta.example.com");
+    // Left blank above, so it still derives from the instance's own origin.
+    expect(envValue(envFile, "OAUTH_CALLBACK_URL")).toBe(
+      "https://clienta.wharf.example.com/auth/v1/callback",
+    );
     expect(envValue(envFile, "SMTP_HOST")).toBe("smtp.sendgrid.net");
     expect(envValue(envFile, "SMTP_PORT")).toBe("587");
     expect(envValue(envFile, "SMTP_USER")).toBe("apikey");
@@ -554,9 +570,11 @@ describe("renderInstanceCompose — Auth settings", () => {
     expect(envValue(envFile, "SMTP_ADMIN_EMAIL")).toBe("ops@clienta.example.com");
     expect(envValue(envFile, "GOOGLE_ENABLED")).toBe("true");
     expect(envValue(envFile, "GOOGLE_CLIENT_ID")).toBe(
-      "google-client-id.apps.googleusercontent.com",
+      "google-client-id.apps.googleusercontent.com,android-client-id",
     );
     expect(envValue(envFile, "GOOGLE_SECRET")).toBe("google-secret-value");
+    expect(envValue(envFile, "GOOGLE_SKIP_NONCE_CHECK")).toBe("true");
+    expect(envValue(envFile, "GOOGLE_EMAIL_OPTIONAL")).toBe("true");
     expect(envValue(envFile, "GITHUB_ENABLED")).toBe("true");
     expect(envValue(envFile, "GITHUB_CLIENT_ID")).toBe("github-client-id");
     expect(envValue(envFile, "GITHUB_SECRET")).toBe("github-secret-value");
@@ -566,6 +584,7 @@ describe("renderInstanceCompose — Auth settings", () => {
     expect(envValue(envFile, "APPLE_ENABLED")).toBe("true");
     expect(envValue(envFile, "APPLE_CLIENT_ID")).toBe("com.example.app.web,com.example.app");
     expect(envValue(envFile, "APPLE_SECRET")).toBe("apple.generated.jwt");
+    expect(envValue(envFile, "APPLE_EMAIL_OPTIONAL")).toBe("true");
   });
 
   it("uncomments the OAuth env lines on the auth service so GoTrue always reads them", async () => {
@@ -579,6 +598,61 @@ describe("renderInstanceCompose — Auth settings", () => {
     expect(composeYaml).not.toContain("# GOTRUE_EXTERNAL_GOOGLE_ENABLED");
   });
 
+  it("routes every provider's redirect URI through the one OAUTH_CALLBACK_URL", async () => {
+    const { composeYaml, envFile } = await renderDoc();
+    for (const provider of ["GOOGLE", "GITHUB", "AZURE", "APPLE"]) {
+      expect(composeYaml).toContain(
+        `GOTRUE_EXTERNAL_${provider}_REDIRECT_URI: \${OAUTH_CALLBACK_URL}`,
+      );
+    }
+    // Upstream's `${API_EXTERNAL_URL}/callback` resolves to a path kong does
+    // not route (only /auth/v1/callback reaches the auth container), so the
+    // provider would reject the flow with redirect_uri_mismatch.
+    expect(composeYaml).not.toContain("REDIRECT_URI: ${API_EXTERNAL_URL}/callback");
+    expect(envValue(envFile, "OAUTH_CALLBACK_URL")).toBe(
+      "https://clienta.wharf.example.com/auth/v1/callback",
+    );
+  });
+
+  it("falls back to the instance's own origin when siteUrl/oauthCallbackUrl are blank", async () => {
+    const { envFile } = await renderDoc({
+      authSettings: { ...DEFAULT_AUTH_SETTINGS, siteUrl: "", oauthCallbackUrl: "" },
+    });
+    expect(envValue(envFile, "SITE_URL")).toBe("https://clienta.wharf.example.com");
+    expect(envValue(envFile, "OAUTH_CALLBACK_URL")).toBe(
+      "https://clienta.wharf.example.com/auth/v1/callback",
+    );
+  });
+
+  it("lets one instance point Site URL and callback at the app it actually backs", async () => {
+    const { envFile } = await renderDoc({
+      authSettings: {
+        ...DEFAULT_AUTH_SETTINGS,
+        siteUrl: "https://app.example.com",
+        oauthCallbackUrl: "https://app.example.com/auth/v1/callback",
+      },
+    });
+    expect(envValue(envFile, "SITE_URL")).toBe("https://app.example.com");
+    expect(envValue(envFile, "OAUTH_CALLBACK_URL")).toBe(
+      "https://app.example.com/auth/v1/callback",
+    );
+    // The instance's own identity is unaffected — only where users are sent.
+    expect(envValue(envFile, "API_EXTERNAL_URL")).toBe("https://clienta.wharf.example.com");
+  });
+
+  it("exposes the per-provider nonce/email flags GoTrue reads", async () => {
+    const { composeYaml } = await renderDoc();
+    expect(composeYaml).toContain(
+      "GOTRUE_EXTERNAL_GOOGLE_SKIP_NONCE_CHECK: ${GOOGLE_SKIP_NONCE_CHECK}",
+    );
+    expect(composeYaml).toContain(
+      "GOTRUE_EXTERNAL_GOOGLE_EMAIL_OPTIONAL: ${GOOGLE_EMAIL_OPTIONAL}",
+    );
+    expect(composeYaml).toContain(
+      "GOTRUE_EXTERNAL_APPLE_EMAIL_OPTIONAL: ${APPLE_EMAIL_OPTIONAL}",
+    );
+  });
+
   it("rejects an Auth setting containing a line break before it ever reaches the .env", async () => {
     await expect(
       renderDoc({
@@ -590,6 +664,8 @@ describe("renderInstanceCompose — Auth settings", () => {
           enableAnonymousUsers: false,
           jwtExpirySeconds: 3600,
           additionalRedirectUrls: "https://evil.example.com/x\nPOSTGRES_PASSWORD=pwned",
+          siteUrl: "",
+          oauthCallbackUrl: "",
           smtpHost: "supabase-mail",
           smtpPort: 2500,
           smtpUser: "fake_mail_user",
@@ -599,6 +675,8 @@ describe("renderInstanceCompose — Auth settings", () => {
           googleEnabled: false,
           googleClientId: "",
           googleSecret: "",
+          googleSkipNonceCheck: false,
+          googleEmailOptional: false,
           githubEnabled: false,
           githubClientId: "",
           githubSecret: "",
@@ -608,6 +686,7 @@ describe("renderInstanceCompose — Auth settings", () => {
           appleEnabled: false,
           appleClientId: "",
           appleSecret: "",
+          appleEmailOptional: false,
         },
       }),
     ).rejects.toThrow(/line break/);

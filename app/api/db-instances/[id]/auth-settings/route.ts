@@ -57,6 +57,8 @@ function toDto(
     enableAnonymousUsers: values.enableAnonymousUsers,
     jwtExpirySeconds: values.jwtExpirySeconds,
     additionalRedirectUrls: values.additionalRedirectUrls,
+    siteUrl: values.siteUrl,
+    oauthCallbackUrl: values.oauthCallbackUrl,
     smtpHost: values.smtpHost,
     smtpPort: values.smtpPort,
     smtpUser: values.smtpUser,
@@ -66,6 +68,8 @@ function toDto(
     googleEnabled: values.googleEnabled,
     googleClientId: values.googleClientId,
     googleSecretConfigured: values.googleSecret !== "",
+    googleSkipNonceCheck: values.googleSkipNonceCheck,
+    googleEmailOptional: values.googleEmailOptional,
     githubEnabled: values.githubEnabled,
     githubClientId: values.githubClientId,
     githubSecretConfigured: values.githubSecret !== "",
@@ -75,6 +79,7 @@ function toDto(
     appleEnabled: values.appleEnabled,
     appleClientId: values.appleClientId,
     appleSecretConfigured: values.appleSecret !== "",
+    appleEmailOptional: values.appleEmailOptional,
     emailTemplates: emailTemplatesDto(templateRows),
   };
 }
@@ -177,6 +182,8 @@ export const PATCH = withErrorHandling(async (req: Request, { params }: Ctx) => 
   if (body.additionalRedirectUrls !== undefined) {
     data.additionalRedirectUrls = body.additionalRedirectUrls;
   }
+  if (body.siteUrl !== undefined) data.siteUrl = body.siteUrl;
+  if (body.oauthCallbackUrl !== undefined) data.oauthCallbackUrl = body.oauthCallbackUrl;
   if (body.smtpHost !== undefined) data.smtpHost = body.smtpHost;
   if (body.smtpPort !== undefined) data.smtpPort = body.smtpPort;
   if (body.smtpUser !== undefined) data.smtpUser = body.smtpUser;
@@ -186,6 +193,10 @@ export const PATCH = withErrorHandling(async (req: Request, { params }: Ctx) => 
   if (body.googleEnabled !== undefined) data.googleEnabled = body.googleEnabled;
   if (body.googleClientId !== undefined) data.googleClientId = body.googleClientId;
   if (body.googleSecret !== undefined) data.googleSecretEnc = sealBytes(body.googleSecret);
+  if (body.googleSkipNonceCheck !== undefined) {
+    data.googleSkipNonceCheck = body.googleSkipNonceCheck;
+  }
+  if (body.googleEmailOptional !== undefined) data.googleEmailOptional = body.googleEmailOptional;
   if (body.githubEnabled !== undefined) data.githubEnabled = body.githubEnabled;
   if (body.githubClientId !== undefined) data.githubClientId = body.githubClientId;
   if (body.githubSecret !== undefined) data.githubSecretEnc = sealBytes(body.githubSecret);
@@ -195,6 +206,7 @@ export const PATCH = withErrorHandling(async (req: Request, { params }: Ctx) => 
   if (body.appleEnabled !== undefined) data.appleEnabled = body.appleEnabled;
   if (body.appleClientId !== undefined) data.appleClientId = body.appleClientId;
   if (body.appleSecret !== undefined) data.appleSecretEnc = sealBytes(body.appleSecret);
+  if (body.appleEmailOptional !== undefined) data.appleEmailOptional = body.appleEmailOptional;
 
   const settings = await prisma.instanceAuthSettings.upsert({
     where: { dbInstanceId: id },
