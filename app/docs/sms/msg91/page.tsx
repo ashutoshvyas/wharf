@@ -15,7 +15,7 @@ import type { Metadata } from "next";
 export const metadata: Metadata = {
   title: "Sending phone OTPs with MSG91 — WHARF",
   description:
-    "How to connect an MSG91 account to a WHARF-managed Supabase instance so phone sign-up can deliver verification codes.",
+    "How to connect an MSG91 account to a WHARF-managed Supabase instance so phone sign-up can deliver verification codes, and the Supabase client code an application needs to use it.",
 };
 
 const CARD = "rounded-[10px] border border-neutral-200 bg-white p-5";
@@ -44,6 +44,24 @@ export default function Msg91DocsPage() {
       <p className="mt-3 text-[15px] leading-[1.65] text-neutral-600">
         What you need to set up in MSG91 so a WHARF-managed Supabase instance can send phone
         verification codes, and what WHARF does with it once you have.
+      </p>
+      <p className="mt-3 text-[15px] leading-[1.65] text-neutral-600">
+        Two people usually read this.{" "}
+        <a
+          href="#msg91-account"
+          className="text-cobalt-600 underline underline-offset-2 hover:text-cobalt-700"
+        >
+          Setting up the MSG91 account
+        </a>{" "}
+        (auth key, DLT registration, templates) is one job;{" "}
+        <a
+          href="#for-developers"
+          className="text-cobalt-600 underline underline-offset-2 hover:text-cobalt-700"
+        >
+          writing the app code
+        </a>{" "}
+        is another, and is far shorter than you might expect — two SDK calls, and you never touch
+        MSG91.
       </p>
 
       <div className={`${CARD} mt-8`}>
@@ -101,7 +119,154 @@ export default function Msg91DocsPage() {
         </li>
       </ul>
 
-      <h2 className={H2}>What you need before you start</h2>
+      <h2 className={H2} id="for-developers">
+        For the app developer
+      </h2>
+      <p className={P}>
+        You do not integrate with MSG91. You do not call its API, hold its credentials, generate a
+        code, or verify one. All of that is the instance&apos;s job. From the application&apos;s
+        point of view this is ordinary Supabase phone auth, and the code below is the entire
+        integration.
+      </p>
+      <p className={P}>
+        Everything you need is the project URL and the anon key, the same pair you already use for
+        every other Supabase call — in the WHARF panel, open the instance and use{" "}
+        <strong>Connection details</strong>. No instance ID, and nothing that points at WHARF: your
+        app talks to Supabase, and Supabase talks to WHARF on its own.
+      </p>
+
+      <h3 className={H3}>Set up the client</h3>
+      <Pre>{`import { createClient } from '@supabase/supabase-js'
+
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,   // https://<your-instance>.<your-domain>
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+)`}</Pre>
+
+      <h3 className={H3}>Step 1 — Send the code</h3>
+      <p className={P}>
+        Pass the number in international E.164 form, with the country code and a leading{" "}
+        <code className={CODE}>+</code>.
+      </p>
+      <Pre>{`const { error } = await supabase.auth.signInWithOtp({
+  phone: '+919999999999',
+})
+
+if (error) {
+  // see the error table below
+}
+// no session yet — a code is now on its way to the handset`}</Pre>
+      <p className={P}>
+        By default this creates the user if the number is new. To restrict it to people who already
+        have an account, pass{" "}
+        <code className={CODE}>{`options: { shouldCreateUser: false }`}</code>.
+      </p>
+
+      <h3 className={H3}>Step 2 — Verify what they typed</h3>
+      <p className={P}>
+        This is the call that returns a session. Use{" "}
+        <code className={CODE}>type: &apos;sms&apos;</code> for sign-in and sign-up.
+      </p>
+      <Pre>{`const { data, error } = await supabase.auth.verifyOtp({
+  phone: '+919999999999',
+  token: '123456',        // exactly what the user typed
+  type: 'sms',
+})
+
+if (error) {
+  // wrong or expired code
+} else {
+  // data.session and data.user are populated — the user is signed in
+}`}</Pre>
+      <p className={P}>
+        That is the whole flow. The code&apos;s length and how long it stays valid are set per
+        instance in the WHARF panel, not in your app.
+      </p>
+
+      <h3 className={H3}>Letting someone resend</h3>
+      <p className={P}>
+        Call <code className={CODE}>signInWithOtp</code> again with the same number. There is a
+        minimum gap between messages (also set in the panel), and calling again too soon returns{" "}
+        <code className={CODE}>over_sms_send_rate_limit</code> — so disable your resend button until
+        that window has passed rather than letting users hammer it.
+      </p>
+
+      <h3 className={H3}>Changing a phone number later</h3>
+      <p className={P}>
+        For an already signed-in user, this is a different flow — the confirmation goes to the new
+        number, and it verifies with a different type:
+      </p>
+      <Pre>{`await supabase.auth.updateUser({ phone: '+919888888888' })
+
+await supabase.auth.verifyOtp({
+  phone: '+919888888888',
+  token: '123456',
+  type: 'phone_change',     // not 'sms'
+})`}</Pre>
+
+      <h3 className={H3}>Errors worth handling by name</h3>
+      <p className={P}>
+        Read <code className={CODE}>error.code</code> rather than matching on the message text,
+        which is not stable.
+      </p>
+      <div className="mb-4 overflow-x-auto">
+        <table className="w-full border-collapse text-[13.5px]">
+          <thead>
+            <tr className="border-b border-neutral-200 text-left">
+              <th className="py-2 pr-4 font-semibold text-ink">error.code</th>
+              <th className="py-2 font-semibold text-ink">What it means for you</th>
+            </tr>
+          </thead>
+          <tbody className="text-neutral-600">
+            <tr className="border-b border-neutral-100">
+              <td className="py-2.5 pr-4 align-top font-mono text-[12.5px]">
+                over_sms_send_rate_limit
+              </td>
+              <td className="py-2.5 align-top">
+                Asked again too soon. Show a countdown; do not retry automatically.
+              </td>
+            </tr>
+            <tr className="border-b border-neutral-100">
+              <td className="py-2.5 pr-4 align-top font-mono text-[12.5px]">otp_expired</td>
+              <td className="py-2.5 align-top">
+                The code is past its validity, or was already used. Offer a resend.
+              </td>
+            </tr>
+            <tr className="border-b border-neutral-100">
+              <td className="py-2.5 pr-4 align-top font-mono text-[12.5px]">sms_send_failed</td>
+              <td className="py-2.5 align-top">
+                Delivery failed downstream — not something the user can fix. Report it; the reason
+                is in the panel logs.
+              </td>
+            </tr>
+            <tr className="border-b border-neutral-100">
+              <td className="py-2.5 pr-4 align-top font-mono text-[12.5px]">
+                phone_provider_disabled
+              </td>
+              <td className="py-2.5 align-top">
+                Phone sign-up is switched off on the instance. A configuration problem, not a code
+                one.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div className={CARD}>
+        <p className="mb-2 text-[14px] font-semibold text-ink">
+          If you find yourself reaching for the MSG91 SDK, stop
+        </p>
+        <p className="m-0 text-[14px] leading-[1.65] text-neutral-600">
+          Sending the code yourself produces a code Supabase does not know about, so{" "}
+          <code className={CODE}>verifyOtp</code> will reject whatever the user types. The two calls
+          above are the supported path; everything below this point is for whoever configures the
+          MSG91 account, and is not needed to write the app.
+        </p>
+      </div>
+
+      <h2 className={H2} id="msg91-account">
+        What you need before you start
+      </h2>
       <ol className="mb-4 ml-5 list-decimal space-y-1.5">
         <li className={LI}>An MSG91 account.</li>
         <li className={LI}>
