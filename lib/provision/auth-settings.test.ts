@@ -165,9 +165,14 @@ describe("applyAuthSettings", () => {
     expect(uploadedPaths).toContain("/opt/db-instances/sb_4f2a/.env");
 
     const composeCall = execMock.mock.calls.find((c) => String(c[1]).includes("docker compose"));
-    expect(composeCall?.[1]).toBe("docker compose -p sb_4f2a up -d auth");
-    // Scoped restart: db/kong/studio are never named on the command line.
-    expect(String(composeCall?.[1])).not.toMatch(/\b(db|kong|studio)\b/);
+    expect(composeCall?.[1]).toBe(
+      "cd /opt/db-instances/sb_4f2a && docker compose -p sb_4f2a up -d auth",
+    );
+    // Scoped restart: db/kong/studio are never named as services. Matched
+    // against the compose fragment alone — the `cd` path legitimately
+    // contains "db-instances".
+    const composeFragment = String(composeCall?.[1]).split("&&")[1];
+    expect(composeFragment).not.toMatch(/\b(db|kong|studio)\b/);
 
     expect(serverLockHolder("srv-1")).toBeNull();
   });

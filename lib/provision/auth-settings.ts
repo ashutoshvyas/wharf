@@ -9,10 +9,13 @@
  * docker-compose.yml/.env (lib/provision/render.ts), then restarts ONLY its
  * `auth` container — `docker compose up -d auth` only recreates the named
  * service, leaving db/kong/studio untouched even though they're interpolated
- * from the same .env file. Synchronous, lock-holding shape, mirroring
- * pipeline.ts's stopInstance/startInstance — not the async job-stream
- * pattern used by provision/restore/remove, since this completes in a few
- * seconds rather than minutes.
+ * from the same .env file. The `cd` into remotePath is required: unlike
+ * `stop`/`start`/`ps`, which resolve the project from running container
+ * labels, `up` has to read docker-compose.yml off disk, and `-p` alone
+ * doesn't tell Compose where to find it. Synchronous, lock-holding shape,
+ * mirroring pipeline.ts's stopInstance/startInstance — not the async
+ * job-stream pattern used by provision/restore/remove, since this completes
+ * in a few seconds rather than minutes.
  */
 import type { InstanceAuthSettings, InstanceEmailTemplate } from "@prisma/client";
 import { open } from "@/lib/crypto";
@@ -146,7 +149,7 @@ export async function applyAuthSettings(
       await sftpWrite(conn, `${instance.remotePath}/.env`, envFile, 0o600);
       const res = await exec(
         conn,
-        `docker compose -p ${instance.composeProjectName} up -d auth`,
+        `cd ${instance.remotePath} && docker compose -p ${instance.composeProjectName} up -d auth`,
         { timeoutMs: 120_000 },
       );
       if (res.code !== 0) {
