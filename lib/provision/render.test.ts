@@ -495,6 +495,7 @@ describe("renderInstanceCompose — Auth settings", () => {
     expect(envValue(envFile, "SMTP_PASS")).toBe("fake_mail_password");
     expect(envValue(envFile, "SMTP_SENDER_NAME")).toBe("fake_sender");
     expect(envValue(envFile, "SMTP_ADMIN_EMAIL")).toBe("admin@example.com");
+    expect(envValue(envFile, "MANUAL_LINKING_ENABLED")).toBe("false");
     expect(envValue(envFile, "GOOGLE_ENABLED")).toBe("false");
     expect(envValue(envFile, "GOOGLE_CLIENT_ID")).toBe("");
     expect(envValue(envFile, "GOOGLE_SECRET")).toBe("");
@@ -516,6 +517,7 @@ describe("renderInstanceCompose — Auth settings", () => {
         enableEmailAutoconfirm: false,
         enablePhoneSignup: true,
         enableAnonymousUsers: true,
+        manualLinkingEnabled: true,
         jwtExpirySeconds: 7200,
         additionalRedirectUrls: "https://clienta.example.com/callback",
         siteUrl: "https://clienta.example.com",
@@ -553,6 +555,7 @@ describe("renderInstanceCompose — Auth settings", () => {
     expect(envValue(envFile, "ENABLE_EMAIL_AUTOCONFIRM")).toBe("false");
     expect(envValue(envFile, "ENABLE_PHONE_SIGNUP")).toBe("true");
     expect(envValue(envFile, "ENABLE_ANONYMOUS_USERS")).toBe("true");
+    expect(envValue(envFile, "MANUAL_LINKING_ENABLED")).toBe("true");
     expect(envValue(envFile, "JWT_EXPIRY")).toBe("7200");
     expect(envValue(envFile, "ADDITIONAL_REDIRECT_URLS")).toBe(
       "https://clienta.example.com/callback",
@@ -640,6 +643,15 @@ describe("renderInstanceCompose — Auth settings", () => {
     expect(envValue(envFile, "API_EXTERNAL_URL")).toBe("https://clienta.wharf.example.com");
   });
 
+  it("wires manual linking to the env var GoTrue actually reads", async () => {
+    // GoTrue derives this name from SecurityConfiguration.ManualLinkingEnabled
+    // via split_words — a typo here is silent, the setting simply never applies.
+    const { composeYaml } = await renderDoc();
+    expect(composeYaml).toContain(
+      "GOTRUE_SECURITY_MANUAL_LINKING_ENABLED: ${MANUAL_LINKING_ENABLED}",
+    );
+  });
+
   it("exposes the per-provider nonce/email flags GoTrue reads", async () => {
     const { composeYaml } = await renderDoc();
     expect(composeYaml).toContain(
@@ -662,6 +674,7 @@ describe("renderInstanceCompose — Auth settings", () => {
           enableEmailAutoconfirm: true,
           enablePhoneSignup: false,
           enableAnonymousUsers: false,
+          manualLinkingEnabled: false,
           jwtExpirySeconds: 3600,
           additionalRedirectUrls: "https://evil.example.com/x\nPOSTGRES_PASSWORD=pwned",
           siteUrl: "",

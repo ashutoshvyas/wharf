@@ -222,6 +222,7 @@ interface FormState {
   enableEmailAutoconfirm: boolean;
   enablePhoneSignup: boolean;
   enableAnonymousUsers: boolean;
+  manualLinkingEnabled: boolean;
   jwtExpirySeconds: string;
   additionalRedirectUrls: string;
   siteUrl: string;
@@ -256,6 +257,7 @@ function formFromDto(dto: AuthSettingsDto): FormState {
     enableEmailAutoconfirm: dto.enableEmailAutoconfirm,
     enablePhoneSignup: dto.enablePhoneSignup,
     enableAnonymousUsers: dto.enableAnonymousUsers,
+    manualLinkingEnabled: dto.manualLinkingEnabled,
     jwtExpirySeconds: String(dto.jwtExpirySeconds),
     additionalRedirectUrls: dto.additionalRedirectUrls,
     siteUrl: dto.siteUrl,
@@ -291,6 +293,7 @@ function toPayload(form: FormState): AuthSettingsUpdatePayload {
     enableEmailAutoconfirm: form.enableEmailAutoconfirm,
     enablePhoneSignup: form.enablePhoneSignup,
     enableAnonymousUsers: form.enableAnonymousUsers,
+    manualLinkingEnabled: form.manualLinkingEnabled,
     jwtExpirySeconds: Number(form.jwtExpirySeconds),
     additionalRedirectUrls: form.additionalRedirectUrls,
     // Trimmed, so a stray space can't turn "unset" into a URL GoTrue rejects.
@@ -433,6 +436,18 @@ export function AuthSettingsForm({ instance, role }: { instance: InstanceDto; ro
               disabled={!canWrite}
               onChange={(v) => setForm({ ...form, disableSignup: v })}
             />
+            <div>
+              <Toggle
+                label="Allow manual linking"
+                checked={form.manualLinkingEnabled}
+                disabled={!canWrite}
+                onChange={(v) => setForm({ ...form, manualLinkingEnabled: v })}
+              />
+              <p className="mt-1 text-xs text-neutral-500">
+                Enables GoTrue&apos;s manual linking APIs, so a signed-in user can attach a
+                second provider (or unlink one) from their existing account.
+              </p>
+            </div>
             <Toggle
               label="Allow anonymous sign-ins"
               checked={form.enableAnonymousUsers}

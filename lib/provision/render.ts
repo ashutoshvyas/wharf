@@ -144,6 +144,8 @@ export interface AuthSettingsValues {
   enableEmailAutoconfirm: boolean;
   enablePhoneSignup: boolean;
   enableAnonymousUsers: boolean;
+  /** GoTrue's linkIdentity/unlinkIdentity APIs. */
+  manualLinkingEnabled: boolean;
   jwtExpirySeconds: number;
   additionalRedirectUrls: string;
   /** GoTrue's default post-auth landing URL. Empty = the instance's own API origin. */
@@ -190,6 +192,7 @@ export const DEFAULT_AUTH_SETTINGS: AuthSettingsValues = {
   enableEmailAutoconfirm: true,
   enablePhoneSignup: false,
   enableAnonymousUsers: false,
+  manualLinkingEnabled: false,
   jwtExpirySeconds: 3600,
   additionalRedirectUrls: "",
   siteUrl: "",
@@ -495,6 +498,7 @@ async function renderEnv(
     ENABLE_EMAIL_AUTOCONFIRM: bool(auth.enableEmailAutoconfirm),
     ENABLE_PHONE_SIGNUP: bool(auth.enablePhoneSignup),
     ENABLE_ANONYMOUS_USERS: bool(auth.enableAnonymousUsers),
+    MANUAL_LINKING_ENABLED: bool(auth.manualLinkingEnabled),
     JWT_EXPIRY: String(auth.jwtExpirySeconds),
     ADDITIONAL_REDIRECT_URLS: auth.additionalRedirectUrls,
     // Both override the API-origin default set in `values` above. Falling back

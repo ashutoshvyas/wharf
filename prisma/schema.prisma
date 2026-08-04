@@ -135,6 +135,8 @@ model InstanceAuthSettings {
   enableEmailAutoconfirm Boolean @default(true) @map("enable_email_autoconfirm")
   enablePhoneSignup      Boolean @default(false) @map("enable_phone_signup")
   enableAnonymousUsers   Boolean @default(false) @map("enable_anonymous_users")
+  // GoTrue's linkIdentity/unlinkIdentity APIs — off in GoTrue's own default.
+  manualLinkingEnabled   Boolean @default(false) @map("manual_linking_enabled")
   jwtExpirySeconds       Int     @default(3600) @map("jwt_expiry_seconds")
   additionalRedirectUrls String? @map("additional_redirect_urls")
 

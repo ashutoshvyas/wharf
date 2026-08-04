@@ -82,6 +82,7 @@ describe("decryptAuthSettings", () => {
       enableEmailAutoconfirm: true,
       enablePhoneSignup: false,
       enableAnonymousUsers: false,
+      manualLinkingEnabled: false,
       jwtExpirySeconds: 3600,
       additionalRedirectUrls: null,
       siteUrl: null,

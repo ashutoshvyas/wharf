@@ -47,6 +47,7 @@ export function decryptAuthSettings(row: InstanceAuthSettings | null): AuthSetti
     enableEmailAutoconfirm: row.enableEmailAutoconfirm,
     enablePhoneSignup: row.enablePhoneSignup,
     enableAnonymousUsers: row.enableAnonymousUsers,
+    manualLinkingEnabled: row.manualLinkingEnabled,
     jwtExpirySeconds: row.jwtExpirySeconds,
     additionalRedirectUrls: row.additionalRedirectUrls ?? DEFAULT_AUTH_SETTINGS.additionalRedirectUrls,
     siteUrl: row.siteUrl ?? DEFAULT_AUTH_SETTINGS.siteUrl,

@@ -166,6 +166,10 @@ services:
       GOTRUE_SITE_URL: ${SITE_URL}
       GOTRUE_URI_ALLOW_LIST: ${ADDITIONAL_REDIRECT_URLS}
       GOTRUE_DISABLE_SIGNUP: ${DISABLE_SIGNUP}
+      # GoTrue's manual account-linking APIs (linkIdentity/unlinkIdentity),
+      # which let a signed-in user attach a second provider to their account.
+      # Off unless an operator enables it, matching GoTrue's own default.
+      GOTRUE_SECURITY_MANUAL_LINKING_ENABLED: ${MANUAL_LINKING_ENABLED}
 
       GOTRUE_JWT_ADMIN_ROLES: service_role
       GOTRUE_JWT_AUD: authenticated
