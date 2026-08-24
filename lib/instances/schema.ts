@@ -27,6 +27,13 @@ export const createInstanceSchema = z.object({
 
 export type CreateInstanceInput = z.infer<typeof createInstanceSchema>;
 
+/** PATCH /api/db-instances/:id/ssl-mode — an explicit pooler TLS policy. */
+export const updateInstanceSslModeSchema = z.object({
+  sslMode: z.enum(INSTANCE_SSL_MODES),
+});
+
+export type UpdateInstanceSslModeInput = z.infer<typeof updateInstanceSslModeSchema>;
+
 /**
  * DELETE /api/db-instances/:id body — a type-the-name confirmation
  * (architecture §4.3 "admin-only, type-the-name confirmation"). The value is

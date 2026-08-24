@@ -24,6 +24,7 @@ export type Action =
   | "instance.retry"
   | "instance.remove"
   | "instance.restore"
+  | "instance.ssl-mode.write"
   | "instance.auth-settings.write"
   | "secrets.reveal"
   | "audit.read"
@@ -50,6 +51,8 @@ const MATRIX: Record<Action, Role[]> = {
   // At least as destructive as remove (it overwrites live data in place),
   // same tier.
   "instance.restore": ADMIN_ONLY,
+  // Changes whether the public database pooler accepts plaintext clients.
+  "instance.ssl-mode.write": ADMIN_ONLY,
   // Sensitive infra config (OAuth client secrets, SMTP credentials) — same
   // tier as servers.write. Viewing is gated by secrets.reveal (below).
   "instance.auth-settings.write": ADMIN_ONLY,

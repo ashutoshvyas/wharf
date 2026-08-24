@@ -398,6 +398,17 @@ export async function startInstance(id: string): Promise<InstanceDto> {
   return apiFetch<InstanceDto>(`/api/db-instances/${id}/start`, { method: "POST" });
 }
 
+/** Applies and persists an existing instance's Supavisor client TLS policy. */
+export async function updateInstanceSslMode(
+  id: string,
+  sslMode: InstanceSslMode,
+): Promise<InstanceDto> {
+  return apiFetch<InstanceDto>(
+    `/api/db-instances/${id}/ssl-mode`,
+    jsonInit("PATCH", { sslMode }),
+  );
+}
+
 /** Only valid from `error` (contract §2) → 202 {jobId}. */
 export async function retryInstance(id: string): Promise<JobAcceptedDto> {
   return apiFetch<JobAcceptedDto>(`/api/db-instances/${id}/retry`, {

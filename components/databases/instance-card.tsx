@@ -12,7 +12,15 @@
  */
 import Link from "next/link";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Ellipsis, KeyRound, RotateCcw, ScrollText, Trash2, Upload } from "lucide-react";
+import {
+  Ellipsis,
+  KeyRound,
+  RotateCcw,
+  ScrollText,
+  ShieldCheck,
+  Trash2,
+  Upload,
+} from "lucide-react";
 import { can, type Role } from "@/lib/rbac";
 import { Alert } from "@/components/ui/alert";
 import { Button, ButtonLink } from "@/components/ui/button";
@@ -40,6 +48,7 @@ export interface InstanceCardProps {
   onRetry: () => void;
   onRemove: () => void;
   onRestore: () => void;
+  onSslMode: () => void;
   /** Opens the full-size progress dialog for this instance. */
   onExpandProgress: () => void;
   /** A progress dialog is already open for this instance — it owns the toast. */
@@ -54,6 +63,7 @@ export function InstanceCard({
   onRetry,
   onRemove,
   onRestore,
+  onSslMode,
   onExpandProgress,
   silentProgress = false,
 }: InstanceCardProps) {
@@ -64,6 +74,7 @@ export function InstanceCard({
   const canRetry = can(role, "instance.retry");
   const canRemove = can(role, "instance.remove");
   const canRestore = can(role, "instance.restore");
+  const canChangeSslMode = can(role, "instance.ssl-mode.write");
   const canReveal = can(role, "secrets.reveal");
 
   const busy = isTransitional(instance.status);
@@ -95,6 +106,15 @@ export function InstanceCard({
             label: "Connection & secrets",
             icon: <KeyRound size={15} strokeWidth={1.75} />,
             onSelect: onSecrets,
+          } satisfies DropdownItem,
+        ]
+      : []),
+    ...(canChangeSslMode
+      ? [
+          {
+            label: "Change SSL mode…",
+            icon: <ShieldCheck size={15} strokeWidth={1.75} />,
+            onSelect: onSslMode,
           } satisfies DropdownItem,
         ]
       : []),

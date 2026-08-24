@@ -4,7 +4,12 @@
  * length cap are load-bearing, not cosmetic (contract §7).
  */
 import { describe, expect, it } from "vitest";
-import { createInstanceSchema, removeSchema, slugSchema } from "./schema";
+import {
+  createInstanceSchema,
+  removeSchema,
+  slugSchema,
+  updateInstanceSslModeSchema,
+} from "./schema";
 
 const UUID = "4f2a1b3c-0000-4000-8000-000000000000";
 
@@ -91,6 +96,13 @@ describe("createInstanceSchema — serverId", () => {
     expect(create({ sslMode: "require" }).success).toBe(true);
     expect(create({ sslMode: "disable" }).success).toBe(true);
     expect(create({ sslMode: "prefer" }).success).toBe(false);
+  });
+
+  it("validates existing-instance SSL mode updates", () => {
+    expect(updateInstanceSslModeSchema.safeParse({ sslMode: "require" }).success).toBe(true);
+    expect(updateInstanceSslModeSchema.safeParse({ sslMode: "disable" }).success).toBe(true);
+    expect(updateInstanceSslModeSchema.safeParse({ sslMode: "prefer" }).success).toBe(false);
+    expect(updateInstanceSslModeSchema.safeParse({}).success).toBe(false);
   });
 });
 

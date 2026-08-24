@@ -35,6 +35,7 @@ import { NewInstanceModal } from "./new-instance-modal";
 import { jobKindFor, ProvisionProgress, type JobKind } from "./provision-progress";
 import { RestoreBackupModal } from "./restore-backup-modal";
 import { SecretsModal } from "./secrets-modal";
+import { SslModeModal } from "./ssl-mode-modal";
 
 const POLL_TRANSITIONAL_MS = 5_000;
 const POLL_IDLE_MS = 30_000;
@@ -61,6 +62,7 @@ export function DatabasesView({
   const [removeFor, setRemoveFor] = useState<InstanceDto | null>(null);
   const [forceRemove, setForceRemove] = useState(false);
   const [restoreFor, setRestoreFor] = useState<InstanceDto | null>(null);
+  const [sslModeFor, setSslModeFor] = useState<InstanceDto | null>(null);
   /**
    * The dialog's job kind is tracked explicitly here rather than derived from
    * `instance.status` — a mutation's `onSuccess` only ever sees the row as it
@@ -195,6 +197,7 @@ export function DatabasesView({
               onRestore={() => {
                 if (canRestore) setRestoreFor(instance);
               }}
+              onSslMode={() => setSslModeFor(instance)}
               onExpandProgress={() => setProgress({ instance, kind: jobKindFor(instance) })}
             />
           ))}
@@ -215,6 +218,12 @@ export function DatabasesView({
         open={secretsFor !== null}
         onClose={() => setSecretsFor(null)}
         instance={secretsFor}
+      />
+
+      <SslModeModal
+        open={sslModeFor !== null}
+        onClose={() => setSslModeFor(null)}
+        instance={sslModeFor}
       />
 
       <LogTailModal

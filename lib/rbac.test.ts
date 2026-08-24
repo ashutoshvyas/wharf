@@ -29,6 +29,7 @@ describe("can() — role matrix spot checks", () => {
       "instance.retry",
       "instance.remove",
       "instance.restore",
+      "instance.ssl-mode.write",
       "instance.auth-settings.write",
       "secrets.reveal",
       "users",
@@ -62,6 +63,7 @@ describe("can() — role matrix spot checks", () => {
       "server.delete",
       "instance.remove",
       "instance.restore",
+      "instance.ssl-mode.write",
       "instance.auth-settings.write",
       "users",
     ];
@@ -86,6 +88,7 @@ describe("can() — role matrix spot checks", () => {
       "instance.retry",
       "instance.remove",
       "instance.restore",
+      "instance.ssl-mode.write",
       "instance.auth-settings.write",
       "secrets.reveal",
       "audit.read",
