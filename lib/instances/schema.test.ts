@@ -77,13 +77,20 @@ describe("createInstanceSchema — serverId", () => {
     }
   });
 
-  it("returns the parsed triple on success", () => {
+  it("defaults new instances to required TLS", () => {
     const parsed = create();
     expect(parsed.success && parsed.data).toEqual({
       serverId: UUID,
       name: "clienta-prod",
       slug: "clienta",
+      sslMode: "require",
     });
+  });
+
+  it("accepts only the two supported SSL modes", () => {
+    expect(create({ sslMode: "require" }).success).toBe(true);
+    expect(create({ sslMode: "disable" }).success).toBe(true);
+    expect(create({ sslMode: "prefer" }).success).toBe(false);
   });
 });
 

@@ -207,7 +207,7 @@ const POOLER_COMPOSE = `docker compose -p wharf-pooler -f ${POOLER_REMOTE_DIR}/d
 /** Lenient "is the pooler running" probe — parse failures = no (mirrors traefikRunning). */
 async function poolerRunning(conn: SshConnection): Promise<boolean> {
   try {
-    const res = await exec(conn, `${POOLER_COMPOSE} ps --format json`);
+    const res = await exec(conn, `${POOLER_COMPOSE} ps --format json supavisor`);
     return (
       res.code === 0 && res.stdout.trim() !== "" && res.stdout.includes('"running"')
     );
@@ -216,40 +216,56 @@ async function poolerRunning(conn: SshConnection): Promise<boolean> {
   }
 }
 
+/**
+ * Upload and converge the shared pooler configuration. Exported so the first
+ * `require` instance provisioned onto an older, already-bootstrapped server
+ * can install the TLS listener before its tenant is registered.
+ */
+export async function refreshPooler(
+  conn: SshConnection,
+  emit: EmitFn,
+  serverId: string,
+): Promise<void> {
+  const stream = lineStreamer(emit);
+  const rendered = await renderPoolerTemplates(serverId);
+  for (const file of rendered) {
+    await sftpWrite(conn, file.remotePath, file.content, 0o644);
+  }
+  const res = await exec(conn, `${POOLER_COMPOSE} up -d`, {
+    timeoutMs: 120_000,
+    onStdout: stream,
+    onStderr: stream,
+  });
+  if (res.code !== 0) {
+    throw new Error(
+      `docker compose up -d (pooler) failed (code ${res.code}): ${res.stderr.trim()}`,
+    );
+  }
+  if (!(await poolerRunning(conn))) {
+    throw new Error(
+      "Pooler containers are not running after `docker compose up -d` — " +
+        `check \`${POOLER_COMPOSE} logs\` on the server.`,
+    );
+  }
+}
+
 const installPooler: BootstrapStep = {
   name: "installPooler",
-  // Unlike uploadTraefikConfig/startTraefik, this genuinely IS "already done —
-  // skip": the pooler's rendered config only depends on that server's own
-  // persisted secrets (lib/bootstrap/pooler-secrets.ts), never on panel-wide
-  // settings that can change between runs, so there is nothing to re-apply
-  // once both containers are up.
+  // Always re-apply. The pooler template now owns persistent TLS material, so
+  // a bootstrap re-run must converge older servers onto the certificate mount
+  // and downstream TLS environment even when their old containers are healthy.
   async check(conn, emit) {
     const running = await poolerRunning(conn);
-    emit("info", running ? "pooler is running" : "pooler is not running");
-    return running;
+    emit(
+      "info",
+      running
+        ? "pooler is running — re-applying to pick up TLS/config changes"
+        : "pooler is not running",
+    );
+    return false;
   },
   async apply(conn, emit, serverId) {
-    const stream = lineStreamer(emit);
-    const rendered = await renderPoolerTemplates(serverId);
-    for (const file of rendered) {
-      await sftpWrite(conn, file.remotePath, file.content, 0o644);
-    }
-    const res = await exec(conn, `${POOLER_COMPOSE} up -d`, {
-      timeoutMs: 120_000,
-      onStdout: stream,
-      onStderr: stream,
-    });
-    if (res.code !== 0) {
-      throw new Error(
-        `docker compose up -d (pooler) failed (code ${res.code}): ${res.stderr.trim()}`,
-      );
-    }
-    if (!(await poolerRunning(conn))) {
-      throw new Error(
-        "Pooler containers are not running after `docker compose up -d` — " +
-          `check \`${POOLER_COMPOSE} logs\` on the server.`,
-      );
-    }
+    await refreshPooler(conn, emit, serverId);
   },
 };
 

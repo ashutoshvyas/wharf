@@ -44,6 +44,7 @@ export const POST = withErrorHandling(async (req: Request): Promise<Response> =>
     serverId: body.serverId,
     name: body.name,
     slug: body.slug,
+    sslMode: body.sslMode,
     userId: session.user.id,
     userEmail: session.user.email,
   });

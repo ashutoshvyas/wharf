@@ -34,6 +34,11 @@ enum InstanceStatus {
   restoring
 }
 
+enum InstanceSslMode {
+  require
+  disable
+}
+
 model Server {
   id                 String     @id @default(uuid())
   name               String
@@ -94,6 +99,7 @@ model DbInstance {
   remotePath         String         @map("remote_path")
   apiSubdomain       String         @map("api_subdomain")
   studioSubdomain    String         @map("studio_subdomain")
+  sslMode            InstanceSslMode @default(require) @map("ssl_mode")
   pgPasswordEnc      Bytes?         @map("pg_password_enc")
   anonKeyEnc         Bytes?         @map("anon_key_enc")
   serviceRoleKeyEnc  Bytes?         @map("service_role_key_enc")

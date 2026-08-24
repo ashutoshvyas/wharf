@@ -38,6 +38,7 @@ describe("registerPoolerTenant", () => {
       serverId: "srv-1",
       project: "sb_4f2a",
       pgPassword: "PgPass123",
+      sslMode: "require",
     });
 
     expect(execMock).toHaveBeenCalledTimes(1);
@@ -65,6 +66,7 @@ describe("registerPoolerTenant", () => {
         ip_version: "v4",
         default_pool_size: 15,
         default_max_clients: 200,
+        enforce_ssl: true,
         users: [
           {
             db_user: "postgres",
@@ -81,7 +83,12 @@ describe("registerPoolerTenant", () => {
   it("throws with the curl failure surfaced when curl itself never completes the request", async () => {
     execMock.mockResolvedValue(transportFail("connection refused"));
     await expect(
-      registerPoolerTenant(CONN, { serverId: "srv-1", project: "sb_4f2a", pgPassword: "x" }),
+      registerPoolerTenant(CONN, {
+        serverId: "srv-1",
+        project: "sb_4f2a",
+        pgPassword: "x",
+        sslMode: "require",
+      }),
     ).rejects.toThrow(/Supavisor tenant registration failed \(curl exit 22\).*connection refused/s);
   });
 
@@ -90,10 +97,28 @@ describe("registerPoolerTenant", () => {
       httpFail("default_parameter_status can't be blank, require_user can't be blank"),
     );
     await expect(
-      registerPoolerTenant(CONN, { serverId: "srv-1", project: "sb_4f2a", pgPassword: "x" }),
+      registerPoolerTenant(CONN, {
+        serverId: "srv-1",
+        project: "sb_4f2a",
+        pgPassword: "x",
+        sslMode: "require",
+      }),
     ).rejects.toThrow(
       /Supavisor tenant registration failed \(HTTP 400\).*default_parameter_status can't be blank/s,
     );
+  });
+
+  it("allows plaintext for a disabled tenant", async () => {
+    await registerPoolerTenant(CONN, {
+      serverId: "srv-1",
+      project: "sb_4f2a",
+      pgPassword: "PgPass123",
+      sslMode: "disable",
+    });
+
+    const [, cmd] = execMock.mock.calls[0] as [unknown, string];
+    const body = /-d '(\{.*\})'/.exec(cmd)?.[1];
+    expect(JSON.parse(body!).tenant.enforce_ssl).toBe(false);
   });
 });
 

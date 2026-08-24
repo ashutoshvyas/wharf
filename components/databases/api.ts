@@ -9,6 +9,7 @@
  * Lists are a BARE array (like GET /api/servers); an envelope is tolerated
  * defensively so a backend that wraps the payload does not blank the screen.
  */
+import type { InstanceSslMode } from "@/lib/instances/ssl-mode";
 
 /** Contract §2 state machine. */
 export type InstanceStatus =
@@ -43,6 +44,7 @@ export interface InstanceDto {
   remotePath: string;
   apiSubdomain: string;
   studioSubdomain: string;
+  sslMode: InstanceSslMode;
   status: InstanceStatus;
   /**
    * Which engine currently holds a live job — `restoring` alone is
@@ -68,6 +70,7 @@ export interface CreateInstancePayload {
   serverId: string;
   name: string;
   slug: string;
+  sslMode: InstanceSslMode;
 }
 
 /** Contract §3 — GET /api/db-instances/:id/secrets. */
@@ -79,12 +82,13 @@ export interface InstanceSecretsDto {
   pgPassword: string;
   /**
    * The managed server's own host/IP — the shared Supavisor pooler publishes
-   * :5432/:6543 directly there (no subdomain, no Traefik routing involved).
+   * :5432/:6543 directly there (no subdomain or HTTP routing involved).
    * Combined client-side with `pgPassword` and the instance's own
    * `composeProjectName` (InstanceDto) to build the two pooler DSNs shown in
    * the connection modal — no separate pooler secret is ever stored/revealed.
    */
   poolerHost: string;
+  sslMode: InstanceSslMode;
 }
 
 export interface SlugAvailabilityDto {

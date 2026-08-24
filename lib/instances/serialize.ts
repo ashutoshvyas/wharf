@@ -26,6 +26,7 @@ import {
   restoreJobId,
   syncJobId,
 } from "@/lib/provision/job-ids";
+import type { InstanceSslMode } from "./ssl-mode";
 
 /**
  * Prisma `include` matching the embedded `server` ref below — shared by every
@@ -56,6 +57,7 @@ export interface DbInstanceRecord {
   remotePath: string;
   apiSubdomain: string;
   studioSubdomain: string;
+  sslMode: InstanceSslMode;
   status: string;
   lastActionLog: string | null;
   healthCheckedAt: Date | null;
@@ -90,6 +92,7 @@ export interface SerializedDbInstance {
   remotePath: string;
   apiSubdomain: string;
   studioSubdomain: string;
+  sslMode: InstanceSslMode;
   status: string;
   lastActionLog: string | null;
   healthCheckedAt: string | null;
@@ -111,6 +114,7 @@ export function serializeInstance(
     remotePath: instance.remotePath,
     apiSubdomain: instance.apiSubdomain,
     studioSubdomain: instance.studioSubdomain,
+    sslMode: instance.sslMode,
     status: instance.status,
     lastActionLog: instance.lastActionLog ?? null,
     healthCheckedAt: instance.healthCheckedAt

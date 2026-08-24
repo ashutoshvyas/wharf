@@ -34,6 +34,7 @@ import {
   slugify,
 } from "./api";
 import { ProvisionProgress } from "./provision-progress";
+import type { InstanceSslMode } from "@/lib/instances/ssl-mode";
 
 const INPUT_CLASSES =
   "h-10 w-full rounded-[6px] border border-neutral-200 bg-white px-3 text-sm text-ink " +
@@ -72,6 +73,7 @@ export function NewInstanceModal({
   const [serverId, setServerId] = useState("");
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");
+  const [sslMode, setSslMode] = useState<InstanceSslMode>("require");
   const [slugTouched, setSlugTouched] = useState(false);
   const [slugCheck, setSlugCheck] = useState<SlugCheck>({ state: "idle" });
   const [formError, setFormError] = useState<string | null>(null);
@@ -98,6 +100,7 @@ export function NewInstanceModal({
     setServerId("");
     setName("");
     setSlug("");
+    setSslMode("require");
     setSlugTouched(false);
     setSlugCheck({ state: "idle" });
     setFormError(null);
@@ -150,7 +153,7 @@ export function NewInstanceModal({
 
   const create = useMutation({
     mutationFn: () =>
-      createInstance({ serverId: selected?.id ?? "", name: name.trim(), slug }),
+      createInstance({ serverId: selected?.id ?? "", name: name.trim(), slug, sslMode }),
     onSuccess: (data) => {
       void queryClient.invalidateQueries({ queryKey: INSTANCES_QUERY_KEY });
       if (!data.id) {
@@ -388,6 +391,30 @@ export function NewInstanceModal({
                   </b>
                 </p>
               ) : null}
+            </div>
+
+            <div>
+              <label
+                htmlFor="ni-ssl-mode"
+                className="label-track mb-1.5 block text-neutral-500"
+              >
+                SSL mode
+              </label>
+              <select
+                id="ni-ssl-mode"
+                value={sslMode}
+                onChange={(e) => setSslMode(e.target.value as InstanceSslMode)}
+                aria-describedby="ni-ssl-mode-help"
+                className={INPUT_CLASSES}
+              >
+                <option value="require">Require TLS (recommended)</option>
+                <option value="disable">Disable TLS enforcement</option>
+              </select>
+              <p id="ni-ssl-mode-help" className="mt-1.5 text-xs leading-5 text-neutral-500">
+                {sslMode === "require"
+                  ? "Connections must negotiate TLS. Plaintext clients are rejected by the shared pooler."
+                  : "Compatibility mode: plaintext connections are accepted and credentials may cross the network unencrypted."}
+              </p>
             </div>
 
             <Alert

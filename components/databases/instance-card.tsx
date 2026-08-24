@@ -161,7 +161,8 @@ export function InstanceCard({
       </div>
 
       <div className="mb-3.5 text-[12.5px] text-neutral-400">
-        created {formatDate(instance.createdAt)}
+        {instance.sslMode === "require" ? "TLS required" : "TLS not enforced"} · created{" "}
+        {formatDate(instance.createdAt)}
       </div>
 
       {isError ? (

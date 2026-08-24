@@ -7,6 +7,7 @@
  * a leading hyphen are all rejected here rather than at provision time.
  */
 import { z } from "zod";
+import { INSTANCE_SSL_MODES } from "./ssl-mode";
 
 /** DNS-label-safe slug: lowercase alnum start, then alnum or hyphen. */
 export const SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
@@ -21,6 +22,7 @@ export const createInstanceSchema = z.object({
   serverId: z.uuid("serverId must be a UUID"),
   name: z.string().min(1, "name is required").max(64, "must be at most 64 characters"),
   slug: slugSchema,
+  sslMode: z.enum(INSTANCE_SSL_MODES).default("require"),
 });
 
 export type CreateInstanceInput = z.infer<typeof createInstanceSchema>;

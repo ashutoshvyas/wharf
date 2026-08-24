@@ -34,12 +34,13 @@
  */
 import path from "node:path";
 import { ensureServerPrepared } from "@/lib/bootstrap/prepare";
-import type { EmitFn } from "@/lib/bootstrap/steps";
+import { refreshPooler, type EmitFn } from "@/lib/bootstrap/steps";
 import { sealBytes } from "@/lib/servers/seal-bytes";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { open } from "@/lib/crypto";
 import { serverLockHolder, tryAcquireServerLock } from "@/lib/jobs/lock";
+import { isInstanceSslMode, type InstanceSslMode } from "@/lib/instances/ssl-mode";
 import { endJob, publish, startJob } from "@/lib/jobs/stream";
 import { exec, sftpWrite, withConnection } from "@/lib/ssh";
 import { waitForHealthy } from "./health";
@@ -163,6 +164,7 @@ interface PipelineRow {
   remotePath: string;
   apiSubdomain: string;
   studioSubdomain: string;
+  sslMode: InstanceSslMode;
   /**
    * Secrets already stored for this instance, when there are any — retry
    * REUSES them instead of minting new ones. See {@link resolveSecrets}.
@@ -245,6 +247,7 @@ async function runPipeline(
     await runPhase(phaseOpts, "validate", async () => {
       emit("info", `slug ${row.slug} → ${row.apiSubdomain} / ${row.studioSubdomain}`);
       emit("info", `project ${row.composeProjectName} at ${row.remotePath}`);
+      emit("info", `pooler TLS policy: sslmode=${row.sslMode}`);
     });
 
     const secrets = await withConnection(row.serverId, async (conn: SshConnection) => {
@@ -364,12 +367,25 @@ async function runPipeline(
       // decoupled from it, below.
       try {
         await runPhase(phaseOpts, "pooler", async () => {
+          if (row.sslMode === "require") {
+            // Older bootstrapped servers may still be running the pre-TLS
+            // pooler template. Converge it before registering a tenant whose
+            // policy would otherwise require TLS from a listener that cannot
+            // negotiate it.
+            await refreshPooler(conn, emit, row.serverId);
+            emit("info", "shared pooler TLS listener is ready");
+          }
           await registerPoolerTenant(conn, {
             serverId: row.serverId,
             project: row.composeProjectName,
             pgPassword: generated.pgPassword,
+            sslMode: row.sslMode,
           });
-          emit("info", `registered with the shared pooler as postgres.${row.composeProjectName}`);
+          emit(
+            "info",
+            `registered with the shared pooler as postgres.${row.composeProjectName} ` +
+              `(sslmode=${row.sslMode})`,
+          );
         });
       } catch (err) {
         poolerFailed = err instanceof Error ? err.message : String(err);
@@ -400,8 +416,8 @@ async function runPipeline(
       targetType: "db_instance",
       targetId: row.id,
       metadata: poolerFailed
-        ? { slug: row.slug, server: row.serverId, error: poolerFailed }
-        : { slug: row.slug, server: row.serverId },
+        ? { slug: row.slug, server: row.serverId, sslMode: row.sslMode, error: poolerFailed }
+        : { slug: row.slug, server: row.serverId, sslMode: row.sslMode },
     }).catch((auditErr: unknown) => {
       console.error("[provision] failed to write audit row:", auditErr);
     });
@@ -466,6 +482,7 @@ export async function startProvision(input: {
   serverId: string;
   name: string;
   slug: string;
+  sslMode: InstanceSslMode;
   userId: string;
   userEmail: string;
 }): Promise<StartProvisionResult> {
@@ -474,6 +491,9 @@ export async function startProvision(input: {
   const slug = input.slug?.trim() ?? "";
 
   if (!name) return { invalid: "Instance name is required." };
+  if (!isInstanceSslMode(input.sslMode)) {
+    return { invalid: "SSL mode must be either 'require' or 'disable'." };
+  }
   if (!isValidSlug(slug)) {
     return {
       invalid:
@@ -518,6 +538,7 @@ export async function startProvision(input: {
         remotePath,
         apiSubdomain,
         studioSubdomain,
+        sslMode: input.sslMode,
         status: "provisioning",
       },
     });
@@ -530,6 +551,7 @@ export async function startProvision(input: {
       remotePath,
       apiSubdomain,
       studioSubdomain,
+      sslMode: input.sslMode,
     };
   } catch (err) {
     release();
@@ -607,6 +629,7 @@ export async function retryProvision(
       remotePath: instance.remotePath,
       apiSubdomain: instance.apiSubdomain,
       studioSubdomain: instance.studioSubdomain,
+      sslMode: instance.sslMode,
       // Retry keeps this instance's identity — see resolveSecrets.
       existingSecrets: readStoredSecrets(instance),
     },

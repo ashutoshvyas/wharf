@@ -24,6 +24,33 @@
 #     tenant side (lib/provision/render.ts) — see the constant's doc comment
 #     in lib/bootstrap/constants.ts for what this does and does not weaken.
 services:
+  # Generate one persistent downstream certificate per managed server. The
+  # certificate is shared by the listener, while `enforce_ssl` remains a
+  # per-tenant policy in Supavisor. It is intentionally self-signed: libpq's
+  # `sslmode=require` encrypts without hostname verification. A future
+  # verify-full mode can replace these files with an ACME-issued pair without
+  # changing tenant records or connection routing.
+  tls-init:
+    image: alpine/openssl:3.5.4
+    restart: "no"
+    network_mode: none
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        umask 077
+        if [ ! -s /tls/server.key ] || [ ! -s /tls/server.crt ]; then
+          openssl req -x509 -newkey rsa:3072 -sha256 -days 3650 -nodes \
+            -subj "/CN=wharf-pooler" \
+            -addext "subjectAltName=DNS:wharf-pooler" \
+            -keyout /tls/server.key \
+            -out /tls/server.crt
+        fi
+        chmod 600 /tls/server.key
+        chmod 644 /tls/server.crt
+    volumes:
+      - ./tls:/tls
+
   # A plain, lean Postgres — NOT supabase/postgres. This holds only
   # Supavisor's own tenant/cluster/user metadata (Ecto-migrated by the
   # `supavisor` service below), so none of supabase/postgres's init scripts
@@ -52,6 +79,8 @@ services:
     image: supabase/supavisor:2.9.5
     restart: unless-stopped
     depends_on:
+      tls-init:
+        condition: service_completed_successfully
       pooler-db:
         condition: service_healthy
     # Only the two proxy ports are reachable from outside the host. The admin
@@ -88,6 +117,8 @@ services:
       VAULT_ENC_KEY: "{{VAULT_ENC_KEY}}"
       API_JWT_SECRET: "{{API_JWT_SECRET}}"
       METRICS_JWT_SECRET: "{{METRICS_JWT_SECRET}}"
+      GLOBAL_DOWNSTREAM_CERT_PATH: /etc/supavisor/tls/server.crt
+      GLOBAL_DOWNSTREAM_KEY_PATH: /etc/supavisor/tls/server.key
       REGION: local
       ERL_AFLAGS: "-proto_dist inet_tcp"
     # The image's default CMD is bare `/app/bin/server` — migrations are NOT
@@ -99,6 +130,8 @@ services:
         "-c",
         "/app/bin/migrate && /app/bin/server",
       ]
+    volumes:
+      - ./tls:/etc/supavisor/tls:ro
     networks:
       - internal
       - pooler

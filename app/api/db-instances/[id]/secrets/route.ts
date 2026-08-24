@@ -7,7 +7,7 @@
  * Ciphertext is opened in memory, never logged, and the response is
  * `Cache-Control: no-store`. Every call writes a `secret.reveal` audit row.
  *
- * 200 {apiUrl, studioUrl, anonKey, serviceRoleKey, pgPassword, poolerHost}
+ * 200 {apiUrl, studioUrl, anonKey, serviceRoleKey, pgPassword, poolerHost, sslMode}
  * 404  unknown or soft-deleted instance
  * 409  secrets not stored yet (still provisioning, or provisioning failed
  *      before the finalize step)
@@ -37,6 +37,7 @@ export const GET = withErrorHandling(
         id: true,
         apiSubdomain: true,
         studioSubdomain: true,
+        sslMode: true,
         pgPasswordEnc: true,
         anonKeyEnc: true,
         serviceRoleKeyEnc: true,
@@ -63,6 +64,7 @@ export const GET = withErrorHandling(
       serviceRoleKey: open(instance.serviceRoleKeyEnc),
       pgPassword: open(instance.pgPasswordEnc),
       poolerHost: instance.server.host,
+      sslMode: instance.sslMode,
     };
 
     await audit({

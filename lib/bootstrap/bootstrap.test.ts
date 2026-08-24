@@ -175,6 +175,10 @@ describe("templates", () => {
     expect(compose).toContain('"5432:5432"');
     expect(compose).toContain('"6543:6543"');
     expect(compose).toContain("127.0.0.1:4000:4000");
+    expect(compose).toContain("GLOBAL_DOWNSTREAM_CERT_PATH");
+    expect(compose).toContain("GLOBAL_DOWNSTREAM_KEY_PATH");
+    expect(compose).toContain("./tls:/etc/supavisor/tls:ro");
+    expect(compose).toContain("service_completed_successfully");
   });
 });
 
@@ -194,14 +198,13 @@ describe("bootstrap orchestrator", () => {
     const { status, lines } = await watchJob(bootstrapJobId("srv-skip"));
 
     expect(status).toBe("ok");
-    // uploadTraefikConfig and startTraefik always apply (bugfix: a re-run
-    // must actually pick up a changed compose file, e.g. an added env var —
-    // not just confirm the old container is still running); the other five
-    // (installDocker, createTraefikNetwork, createPoolerNetwork, installPooler,
-    // openFirewall) genuinely have nothing to do and report skipped.
+    // Traefik and pooler config always apply so a re-run converges TLS/config
+    // changes; installDocker, both networks and the firewall can still skip.
     const skipped = lines.filter((l) => l.includes("already done — skipped"));
-    expect(skipped).toHaveLength(5);
-    expect(sftpWriteMock).toHaveBeenCalledTimes(TRAEFIK_TEMPLATE_FILES.length);
+    expect(skipped).toHaveLength(4);
+    expect(sftpWriteMock).toHaveBeenCalledTimes(
+      TRAEFIK_TEMPLATE_FILES.length + POOLER_TEMPLATE_FILES.length,
+    );
     // The actual regression: `docker compose ... up -d` must run even when
     // Traefik was already up, or an uploaded config change is silently inert.
     expect(
@@ -210,6 +213,9 @@ describe("bootstrap orchestrator", () => {
     expect(
       lines.some((l) => l.includes("re-applying to pick up any config changes")),
     ).toBe(true);
+    expect(lines.some((l) => l.includes("re-applying to pick up TLS/config changes"))).toBe(
+      true,
+    );
     expect(serverUpdate).toHaveBeenCalledWith({
       where: { id: "srv-skip" },
       data: { bootstrapped: true },

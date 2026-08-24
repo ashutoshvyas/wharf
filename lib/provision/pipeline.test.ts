@@ -39,6 +39,11 @@ vi.mock("@/lib/bootstrap/prepare", () => ({
   ensureServerPrepared: (...a: unknown[]) => ensurePreparedMock(...a),
 }));
 
+const refreshPoolerMock = vi.fn();
+vi.mock("@/lib/bootstrap/steps", () => ({
+  refreshPooler: (...a: unknown[]) => refreshPoolerMock(...a),
+}));
+
 const waitForHealthyMock = vi.fn();
 vi.mock("./health", () => ({
   waitForHealthy: (...a: unknown[]) => waitForHealthyMock(...a),
@@ -79,7 +84,14 @@ import { subscribe } from "@/lib/jobs/stream";
 import { serverLockHolder, tryAcquireServerLock } from "@/lib/jobs/lock";
 
 const ok = (stdout = "") => ({ code: 0, stdout, stderr: "" });
-const BASE = { serverId: "srv-1", name: "clienta-prod", slug: "clienta", userId: "u1", userEmail: "a@b.c" };
+const BASE = {
+  serverId: "srv-1",
+  name: "clienta-prod",
+  slug: "clienta",
+  sslMode: "require" as const,
+  userId: "u1",
+  userEmail: "a@b.c",
+};
 
 const ROW = {
   id: "inst-1",
@@ -90,6 +102,7 @@ const ROW = {
   remotePath: "/opt/db-instances/sb_4f2a",
   apiSubdomain: "clienta.wharf.example.com",
   studioSubdomain: "studio-clienta.wharf.example.com",
+  sslMode: "require" as const,
   status: "provisioning",
   deletedAt: null,
 };
@@ -127,6 +140,7 @@ beforeEach(() => {
   execMock.mockResolvedValue(ok());
   sftpWriteMock.mockResolvedValue(undefined);
   ensurePreparedMock.mockResolvedValue(false); // already prepared
+  refreshPoolerMock.mockResolvedValue(undefined);
   waitForHealthyMock.mockResolvedValue(undefined);
   renderMock.mockResolvedValue({ composeYaml: "services: {}\n", envFile: "K=V\n" });
   registerPoolerMock.mockResolvedValue(undefined);
@@ -186,7 +200,16 @@ describe("startProvision — happy path", () => {
     ]);
     expect(registerPoolerMock).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ serverId: "srv-1", pgPassword: "PgPass123" }),
+      expect.objectContaining({
+        serverId: "srv-1",
+        pgPassword: "PgPass123",
+        sslMode: "require",
+      }),
+    );
+    expect(refreshPoolerMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.any(Function),
+      "srv-1",
     );
 
     // Compose + .env uploaded, .env at 0600.
@@ -256,6 +279,17 @@ function status2(lines: string[]) {
 }
 
 describe("startProvision — failure handling", () => {
+  it("keeps the legacy pooler untouched for a disabled instance", async () => {
+    await startProvision({ ...BASE, sslMode: "disable" });
+    await watchJob(provisionJobId("inst-1"));
+
+    expect(refreshPoolerMock).not.toHaveBeenCalled();
+    expect(registerPoolerMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ sslMode: "disable" }),
+    );
+  });
+
   it("marks the instance error and keeps the log when health checks fail", async () => {
     waitForHealthyMock.mockRejectedValue(new Error("timed out after 300s"));
     await startProvision(BASE);

@@ -10,6 +10,7 @@
  */
 import { useEffect, useRef } from "react";
 import { KeyRound } from "lucide-react";
+import { buildPoolerConnectionString } from "@/lib/instances/pooler-connection";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Dialog, ModalBody, ModalFoot, ModalHead } from "@/components/ui/dialog";
@@ -90,8 +91,14 @@ export function SecretsModal({
           label="Pooler connection — session mode (:5432)"
           secret
           onReveal={async () => {
-            const { pgPassword, poolerHost } = await load();
-            return `postgres://postgres.${instance.composeProjectName}:${pgPassword}@${poolerHost}:5432/postgres`;
+            const { pgPassword, poolerHost, sslMode } = await load();
+            return buildPoolerConnectionString({
+              project: instance.composeProjectName,
+              password: pgPassword,
+              host: poolerHost,
+              port: 5432,
+              sslMode,
+            });
           }}
         />
         <MonoField
@@ -99,8 +106,14 @@ export function SecretsModal({
           label="Pooler connection — transaction mode (:6543)"
           secret
           onReveal={async () => {
-            const { pgPassword, poolerHost } = await load();
-            return `postgres://postgres.${instance.composeProjectName}:${pgPassword}@${poolerHost}:6543/postgres`;
+            const { pgPassword, poolerHost, sslMode } = await load();
+            return buildPoolerConnectionString({
+              project: instance.composeProjectName,
+              password: pgPassword,
+              host: poolerHost,
+              port: 6543,
+              sslMode,
+            });
           }}
         />
         <Alert
@@ -109,10 +122,9 @@ export function SecretsModal({
           title="Every reveal is audited."
         >
           Secrets are stored AES-256-GCM encrypted and decrypted in-memory per
-          request. Revealed values re-mask after 30 seconds. The pooler
-          connections are plain TCP (no TLS yet) — use{" "}
-          <code>sslmode=disable</code>, or configure Supavisor&apos;s TLS
-          yourself.
+          request. Revealed values re-mask after 30 seconds. This instance uses{" "}
+          <code>sslmode={instance.sslMode}</code>; required mode rejects
+          plaintext pooler connections.
         </Alert>
       </ModalBody>
       <ModalFoot>

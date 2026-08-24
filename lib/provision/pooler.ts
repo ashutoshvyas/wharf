@@ -22,6 +22,7 @@ import { POOLER_ADMIN_PORT } from "@/lib/bootstrap/constants";
 import { ensurePoolerSecrets } from "@/lib/bootstrap/pooler-secrets";
 import { exec } from "@/lib/ssh";
 import { poolerDbAlias } from "./naming";
+import type { InstanceSslMode } from "@/lib/instances/ssl-mode";
 
 type SshConnection = Parameters<typeof exec>[0];
 
@@ -104,6 +105,9 @@ export interface PoolerTenantInput {
   /** This instance's own Postgres superuser password (already generated —
    *  no new secret needed just for the pooler). */
   pgPassword: string;
+  /** Require encrypted client connections for this tenant, or retain the
+   * legacy plaintext-compatible behavior. */
+  sslMode: InstanceSslMode;
 }
 
 /**
@@ -138,6 +142,10 @@ export async function registerPoolerTenant(
       ip_version: "v4",
       default_pool_size: 15,
       default_max_clients: 200,
+      // Supavisor identifies the tenant from the startup packet, then rejects
+      // an unencrypted connection before password authentication when this is
+      // true. The listener-level certificate is shared by every tenant.
+      enforce_ssl: input.sslMode === "require",
       users: [
         {
           db_user: "postgres",

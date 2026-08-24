@@ -3,7 +3,10 @@
  * Mirrors lib/bootstrap/bootstrap.test.ts's style: the whole SSH surface is
  * faked, so these assert command sequencing and emitted lines, never a host.
  */
+import { randomBytes } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+process.env.WHARF_MASTER_KEY ??= randomBytes(32).toString("base64");
 
 const execMock = vi.fn();
 const sftpWriteMock = vi.fn();
