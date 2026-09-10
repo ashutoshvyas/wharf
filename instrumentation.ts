@@ -26,6 +26,11 @@ export async function register(): Promise<void> {
     console.error("[instrumentation] config check failed:", err);
   }
 
+  if (process.env.NEXT_RUNTIME === "nodejs") {
+    const { startPhoneDeliveryCleanup } = await import("@/lib/sms/twilio-delivery");
+    startPhoneDeliveryCleanup();
+  }
+
   try {
     const { sweepStaleJobs } = await import("@/lib/instances/recovery");
     await sweepStaleJobs();

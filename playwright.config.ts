@@ -1,5 +1,17 @@
 import { defineConfig, devices } from "@playwright/test";
 
+// Check before starting the application or importing fixtures. Never inherit a
+// remote connection from .env: the suite creates and deletes database records.
+for (const name of ["DATABASE_URL", "DIRECT_URL"] as const) {
+  const value = process.env[name];
+  if (!value || !["127.0.0.1", "localhost", "[::1]"].includes(new URL(value).hostname)) {
+    throw new Error(`E2E requires an explicit local ${name} pointing to a disposable test database.`);
+  }
+}
+if (process.env.E2E_BASE_URL && !["127.0.0.1", "localhost", "[::1]"].includes(new URL(process.env.E2E_BASE_URL).hostname)) {
+  throw new Error("E2E_BASE_URL must point to the isolated local test application.");
+}
+
 /**
  * E2E configuration.
  *
@@ -13,7 +25,7 @@ import { defineConfig, devices } from "@playwright/test";
  * suites (lib/provision, lib/bootstrap) and, ultimately, by the manual
  * verification checklist in docs/deployment.md.
  *
- * Requires a working DATABASE_URL (see .env). The suite seeds and cleans up
+ * Requires explicit local DATABASE_URL and DIRECT_URL values. The suite seeds and cleans up
  * its own users via tests/e2e/fixtures.ts.
  */
 export default defineConfig({

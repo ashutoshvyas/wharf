@@ -113,6 +113,7 @@ model DbInstance {
 
   server            Server                     @relation(fields: [serverId], references: [id], onDelete: Restrict)
   websites          Website[]
+  phoneDeliveries   PhoneDelivery[]
   authSettings      InstanceAuthSettings?
   emailTemplates    InstanceEmailTemplate[]
   analyticsSettings InstanceAnalyticsSettings?
@@ -173,11 +174,8 @@ model InstanceAuthSettings {
   smtpSenderName String? @map("smtp_sender_name")
   smtpAdminEmail String? @map("smtp_admin_email")
 
-  // SMS / phone OTP delivery. `smsProvider` is "" (none), "twilio"
-  // — a provider GoTrue speaks natively — or "msg91", which it does not:
-  // MSG91 is reached through GoTrue's send-SMS hook pointed back at this
-  // panel, so the two are mutually exclusive by construction (an enabled
-  // hook bypasses GOTRUE_SMS_PROVIDER entirely).
+  // Both Twilio and MSG91 use the signed send-SMS hook. Supabase generates
+  // and verifies codes; WHARF chooses delivery channel and handles fallback.
   smsProvider     String? @map("sms_provider")
   smsOtpExp       Int?    @map("sms_otp_exp")
   smsOtpLength    Int?    @map("sms_otp_length")
@@ -187,6 +185,10 @@ model InstanceAuthSettings {
   smsTwilioAccountSid        String? @map("sms_twilio_account_sid")
   smsTwilioAuthTokenEnc      Bytes?  @map("sms_twilio_auth_token_enc")
   smsTwilioMessageServiceSid String? @map("sms_twilio_message_service_sid")
+  smsTwilioDeliveryChannel String @default("sms") @map("sms_twilio_delivery_channel")
+  smsTwilioWhatsappSender String? @map("sms_twilio_whatsapp_sender")
+  smsTwilioContentSid String? @map("sms_twilio_content_sid")
+  smsTwilioSmsFallback Boolean @default(false) @map("sms_twilio_sms_fallback")
 
   // MSG91's DLT-era fields: a flow/template id and the 6-character sender
   // header registered against it, plus the template variable the OTP is
@@ -405,4 +407,26 @@ model AuditLog {
   @@index([createdAt(sort: Desc)])
   @@index([action])
   @@map("audit_log")
+}
+
+// Short-lived delivery state, never an authentication/verification store.
+model PhoneDelivery {
+  id String @id
+  dbInstanceId String @map("db_instance_id")
+  recipientHash String @map("recipient_hash")
+  requestHash String @map("request_hash")
+  channel String
+  fallbackEnabled Boolean @map("fallback_enabled")
+  state String
+  primarySid String? @map("primary_sid")
+  fallbackSid String? @map("fallback_sid")
+  // Encrypted code, recipient, sender configuration and callback credential snapshot.
+  payloadEnc Bytes? @map("payload_enc")
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  instance DbInstance @relation(fields: [dbInstanceId], references: [id], onDelete: Cascade)
+  @@index([dbInstanceId, recipientHash])
+  @@index([expiresAt])
+  @@index([createdAt])
+  @@map("phone_deliveries")
 }

@@ -107,6 +107,12 @@ export const authSettingsUpdateSchema = z
     smsTwilioAccountSid: noLineBreak("smsTwilioAccountSid").optional(),
     smsTwilioAuthToken: z.string().max(1024).optional(),
     smsTwilioMessageServiceSid: noLineBreak("smsTwilioMessageServiceSid").optional(),
+    smsTwilioDeliveryChannel: z.enum(["sms", "whatsapp"]).optional(),
+    smsTwilioWhatsappSender: noLineBreak("smsTwilioWhatsappSender").trim()
+      .regex(/^(?:|(?:whatsapp:)?\+[1-9]\d{1,14})$/, "Use an international WhatsApp sender number, e.g. +14155551234").optional(),
+    smsTwilioContentSid: noLineBreak("smsTwilioContentSid").trim()
+      .regex(/^(?:|HX[0-9a-fA-F]{32})$/, "Use a Twilio Content SID starting with HX followed by 32 hex characters").optional(),
+    smsTwilioSmsFallback: z.boolean().optional(),
     smsMsg91AuthKey: z.string().max(1024).optional(),
     smsMsg91TemplateId: noLineBreak("smsMsg91TemplateId").optional(),
     smsMsg91SenderId: noLineBreak("smsMsg91SenderId").optional(),

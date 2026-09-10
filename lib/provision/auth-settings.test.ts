@@ -117,6 +117,10 @@ describe("decryptAuthSettings", () => {
       smsTwilioAccountSid: null,
       smsTwilioAuthTokenEnc: null,
       smsTwilioMessageServiceSid: null,
+      smsTwilioDeliveryChannel: "sms",
+      smsTwilioWhatsappSender: null,
+      smsTwilioContentSid: null,
+      smsTwilioSmsFallback: false,
       smsMsg91AuthKeyEnc: Buffer.from("sealed"),
       smsMsg91TemplateId: "1234",
       smsMsg91SenderId: null,
@@ -235,5 +239,26 @@ describe("toEmailTemplateValues", () => {
       { flow: "invite", subject: "You're invited", hasBody: true },
       { flow: "magic_link", subject: "", hasBody: false },
     ]);
+  });
+});
+
+describe("hook configuration persistence", () => {
+  it("saves hook credentials under the lock before restarting Auth", async () => {
+    const persist = vi.fn().mockResolvedValue(undefined);
+    await applyAuthSettings("inst-1", SETTINGS, [], persist);
+    expect(persist).toHaveBeenCalledTimes(1);
+    expect(persist.mock.invocationCallOrder[0]).toBeLessThan(sftpWriteMock.mock.invocationCallOrder[0]!);
+    expect(persist.mock.invocationCallOrder[0]).toBeGreaterThan(renderMock.mock.invocationCallOrder[0]!);
+  });
+  it("does not save when the server is busy or proceed to SSH after a database failure", async () => {
+    const persist = vi.fn().mockRejectedValue(new Error("database unavailable"));
+    const release = tryAcquireServerLock("srv-1", "busy");
+    expect(typeof release).toBe("function");
+    try {
+      expect(await applyAuthSettings("inst-1", SETTINGS, [], persist)).toHaveProperty("busy");
+      expect(persist).not.toHaveBeenCalled();
+    } finally { if (typeof release === "function") release(); }
+    await expect(applyAuthSettings("inst-1", SETTINGS, [], persist)).rejects.toThrow("database unavailable");
+    expect(sftpWriteMock).not.toHaveBeenCalled();
   });
 });

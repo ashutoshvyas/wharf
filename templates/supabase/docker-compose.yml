@@ -281,7 +281,7 @@ services:
       GOTRUE_SMS_MAX_FREQUENCY: ${SMS_MAX_FREQUENCY}
       GOTRUE_SMS_TEMPLATE: ${SMS_TEMPLATE}
 
-      # Twilio credentials (when SMS_PROVIDER=twilio)
+      # Legacy native Twilio keys; empty for WHARF-managed delivery.
       GOTRUE_SMS_TWILIO_ACCOUNT_SID: ${SMS_TWILIO_ACCOUNT_SID}
       GOTRUE_SMS_TWILIO_AUTH_TOKEN: ${SMS_TWILIO_AUTH_TOKEN}
       GOTRUE_SMS_TWILIO_MESSAGE_SERVICE_SID: ${SMS_TWILIO_MESSAGE_SERVICE_SID}
@@ -321,7 +321,7 @@ services:
       # GOTRUE_HOOK_PASSWORD_VERIFICATION_ATTEMPT_URI: "pg-functions://postgres/public/password_verification_attempt"
 
       # Send-SMS hook — how a provider GoTrue has no native driver
-      # for (MSG91) is delivered: GoTrue POSTs the generated OTP to the panel,
+      # for (MSG91), or whose channel WHARF controls (Twilio), is delivered: GoTrue POSTs the generated OTP to the panel,
       # which holds that provider's credentials and calls its API. An enabled
       # hook bypasses GOTRUE_SMS_PROVIDER entirely, so the two are never both
       # in play. lib/provision/render.ts STRIPS these three keys when no

@@ -104,7 +104,7 @@ export default function Msg91DocsPage() {
         ▼
   Supabase Auth verifies it   (MSG91 is not involved)`}</Pre>
       <p className={P}>
-        Two consequences worth knowing before you choose MSG91 over Twilio:
+        Two consequences worth knowing when using WHARF-managed delivery:
       </p>
       <ul className="mb-4 ml-5 list-disc space-y-1.5">
         <li className={LI}>
@@ -114,8 +114,7 @@ export default function Msg91DocsPage() {
         </li>
         <li className={LI}>
           <strong>The panel has to be reachable when someone signs up.</strong> If WHARF is down,
-          codes stop going out until it is back. Twilio, which Supabase talks to directly, has no
-          such dependency.
+          codes stop going out until it is back. Twilio delivery through WHARF has the same dependency.
         </li>
       </ul>
 

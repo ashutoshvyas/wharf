@@ -543,6 +543,7 @@ describe("renderInstanceCompose — Auth settings", () => {
 
   it("substitutes every provided Auth setting", async () => {
     const { envFile } = await renderDoc({
+      instanceId: "inst-1", panelUrl: "https://wharf.example.com",
       authSettings: {
         disableSignup: true,
         enableEmailSignup: false,
@@ -588,6 +589,10 @@ describe("renderInstanceCompose — Auth settings", () => {
         smsTwilioAccountSid: "ACtwilio",
         smsTwilioAuthToken: "twilio-token",
         smsTwilioMessageServiceSid: "MGtwilio",
+        smsTwilioDeliveryChannel: "sms",
+        smsTwilioWhatsappSender: "",
+        smsTwilioContentSid: "",
+        smsTwilioSmsFallback: false,
         smsMsg91AuthKey: "",
         smsMsg91TemplateId: "",
         smsMsg91SenderId: "",
@@ -689,7 +694,7 @@ describe("renderInstanceCompose — Auth settings", () => {
     expect(envValue(envFile, "API_EXTERNAL_URL")).toBe("https://clienta.wharf.example.com");
   });
 
-  it("renders Twilio natively and leaves the send-SMS hook keys off entirely", async () => {
+  it("routes Twilio through WHARF without exposing credentials to the instance", async () => {
     const { composeYaml, envFile } = await renderDoc({
       authSettings: {
         ...DEFAULT_AUTH_SETTINGS,
@@ -697,17 +702,20 @@ describe("renderInstanceCompose — Auth settings", () => {
         smsTwilioAccountSid: "ACtwilio",
         smsTwilioAuthToken: "twilio-token",
         smsTwilioMessageServiceSid: "MGtwilio",
+        smsTwilioDeliveryChannel: "sms",
+        smsTwilioWhatsappSender: "",
+        smsTwilioContentSid: "",
+        smsTwilioSmsFallback: false,
       },
       instanceId: "inst-1",
       panelUrl: "https://wharf.example.com",
     });
-    expect(envValue(envFile, "SMS_PROVIDER")).toBe("twilio");
-    expect(envValue(envFile, "SMS_TWILIO_ACCOUNT_SID")).toBe("ACtwilio");
-    expect(envValue(envFile, "SMS_TWILIO_AUTH_TOKEN")).toBe("twilio-token");
-    // A native provider needs no hook, so the keys are stripped rather than
-    // rendered empty — an unused hook cannot then fail config validation.
-    expect(composeYaml).not.toContain("GOTRUE_HOOK_SEND_SMS_ENABLED");
-    expect(composeYaml).not.toContain("GOTRUE_HOOK_SEND_SMS_URI");
+    expect(envValue(envFile, "SMS_PROVIDER")).toBe("");
+    expect(envValue(envFile, "SMS_TWILIO_ACCOUNT_SID")).toBe("");
+    expect(envValue(envFile, "SMS_TWILIO_AUTH_TOKEN")).toBe("");
+    expect(composeYaml).toContain("GOTRUE_HOOK_SEND_SMS_ENABLED");
+    expect(envValue(envFile, "HOOK_SEND_SMS_ENABLED")).toBe("true");
+    expect(envFile).not.toContain("twilio-token");
   });
 
   it("routes MSG91 through the panel hook and leaves SMS_PROVIDER empty", async () => {
@@ -817,6 +825,10 @@ describe("renderInstanceCompose — Auth settings", () => {
           smsTwilioAccountSid: "",
           smsTwilioAuthToken: "",
           smsTwilioMessageServiceSid: "",
+          smsTwilioDeliveryChannel: "sms",
+          smsTwilioWhatsappSender: "",
+          smsTwilioContentSid: "",
+          smsTwilioSmsFallback: false,
           smsMsg91AuthKey: "",
           smsMsg91TemplateId: "",
           smsMsg91SenderId: "",

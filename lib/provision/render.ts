@@ -145,16 +145,16 @@ export interface EmailTemplateValues {
  * wire, so every option in the dropdown is one that has actually been built
  * and has credential fields behind it.
  *
- * "msg91" is the odd one: GoTrue's GetSmsProvider does not know it, so it is
- * delivered through the send-SMS hook instead. An enabled hook bypasses
+ * Both providers use the signed send-SMS hook so WHARF can control channel
+ * selection and Twilio fallback. An enabled hook bypasses
  * GOTRUE_SMS_PROVIDER entirely, which is why this is one field and not two.
  */
 export const SMS_PROVIDERS = ["", "twilio", "msg91"] as const;
 export type SmsProvider = (typeof SMS_PROVIDERS)[number];
 
-/** MSG91 is delivered via the hook; everything else is a native GoTrue provider. */
+/** WHARF delivers both providers so the instance settings control the channel. */
 export function usesSmsHook(provider: SmsProvider): boolean {
-  return provider === "msg91";
+  return provider === "msg91" || provider === "twilio";
 }
 
 export interface AuthSettingsValues {
@@ -183,7 +183,7 @@ export interface AuthSettingsValues {
   smtpPass: string;
   smtpSenderName: string;
   smtpAdminEmail: string;
-  /** "" (none), "twilio" (native), or "msg91" (via the panel's send-SMS hook). */
+  /** "" (none), "twilio" or "msg91" (via the panel's signed send-SMS hook). */
   smsProvider: SmsProvider;
   smsOtpExp: number;
   smsOtpLength: number;
@@ -193,6 +193,10 @@ export interface AuthSettingsValues {
   smsTwilioAccountSid: string;
   smsTwilioAuthToken: string;
   smsTwilioMessageServiceSid: string;
+  smsTwilioDeliveryChannel: "sms" | "whatsapp";
+  smsTwilioWhatsappSender: string;
+  smsTwilioContentSid: string;
+  smsTwilioSmsFallback: boolean;
   smsMsg91AuthKey: string;
   smsMsg91TemplateId: string;
   smsMsg91SenderId: string;
@@ -253,6 +257,10 @@ export const DEFAULT_AUTH_SETTINGS: AuthSettingsValues = {
   smsTwilioAccountSid: "",
   smsTwilioAuthToken: "",
   smsTwilioMessageServiceSid: "",
+  smsTwilioDeliveryChannel: "sms",
+  smsTwilioWhatsappSender: "",
+  smsTwilioContentSid: "",
+  smsTwilioSmsFallback: false,
   smsMsg91AuthKey: "",
   smsMsg91TemplateId: "",
   smsMsg91SenderId: "",
@@ -451,12 +459,21 @@ async function renderCompose(
   kong.labels = kongLabels(input.project, apiSubdomain);
   studio.labels = studioLabels(input.project, studioSubdomain);
 
-  // The send-SMS hook is only meaningful for a provider GoTrue has
-  // no native driver for. Strip the three keys entirely otherwise, rather
+  // The send-SMS hook delivers both configured providers through WHARF. Strip the three keys entirely otherwise, rather
   // than rendering them empty: an instance with no hook provider then carries
   // no hook config at all, and cannot fail config validation over a setting
   // it does not use.
   const auth = input.authSettings ?? DEFAULT_AUTH_SETTINGS;
+  if (auth.smsProvider === "twilio") {
+    let validPanelUrl = false;
+    try {
+      const url = new URL(input.panelUrl ?? "");
+      validPanelUrl = url.protocol === "https:" && !url.username && !url.password && !url.search && !url.hash;
+    } catch { /* Report configuration errors before writing files to the server. */ }
+    if (!input.instanceId || !validPanelUrl) {
+      throw new Error("Twilio delivery requires an instance ID and a public HTTPS PANEL_URL without credentials, query or fragment.");
+    }
+  }
   if (!usesSmsHook(auth.smsProvider)) {
     const authEnv = doc?.services?.auth?.environment;
     if (authEnv && typeof authEnv === "object" && !Array.isArray(authEnv)) {
@@ -593,7 +610,7 @@ async function renderEnv(
     SMTP_SENDER_NAME: auth.smtpSenderName,
     SMTP_ADMIN_EMAIL: auth.smtpAdminEmail,
 
-    // A hook-delivered provider (MSG91) leaves SMS_PROVIDER empty on purpose:
+    // Hook-delivered providers leave SMS_PROVIDER empty on purpose:
     // GoTrue picks the hook over the provider when both are set, and an empty
     // provider is only ever resolved at send time, never at config load.
     SMS_PROVIDER: usesSmsHook(auth.smsProvider) ? "" : auth.smsProvider,
@@ -601,10 +618,10 @@ async function renderEnv(
     SMS_OTP_LENGTH: String(auth.smsOtpLength),
     SMS_MAX_FREQUENCY: auth.smsMaxFrequency,
     SMS_TEMPLATE: auth.smsTemplate,
-    SMS_TWILIO_ACCOUNT_SID: auth.smsTwilioAccountSid,
-    SMS_TWILIO_AUTH_TOKEN: auth.smsTwilioAuthToken,
-    SMS_TWILIO_MESSAGE_SERVICE_SID: auth.smsTwilioMessageServiceSid,
-    // The hook calls back into this panel, which holds the MSG91 credentials
+    SMS_TWILIO_ACCOUNT_SID: "",
+    SMS_TWILIO_AUTH_TOKEN: "",
+    SMS_TWILIO_MESSAGE_SERVICE_SID: "",
+    // The hook calls back into this panel, which holds the provider credentials
     // — they are never rendered into the instance's .env at all.
     // Keyed off the resolved URI, not the provider: enabling the hook with
     // nowhere to call would swallow every OTP silently.

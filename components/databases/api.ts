@@ -133,6 +133,10 @@ export interface AuthSettingsDto {
   smsTwilioAccountSid: string;
   smsTwilioAuthTokenConfigured: boolean;
   smsTwilioMessageServiceSid: string;
+  smsTwilioDeliveryChannel: "sms" | "whatsapp";
+  smsTwilioWhatsappSender: string;
+  smsTwilioContentSid: string;
+  smsTwilioSmsFallback: boolean;
   smsMsg91AuthKeyConfigured: boolean;
   smsMsg91TemplateId: string;
   smsMsg91SenderId: string;
@@ -184,6 +188,10 @@ export interface AuthSettingsUpdatePayload {
   smsTwilioAccountSid?: string;
   smsTwilioAuthToken?: string;
   smsTwilioMessageServiceSid?: string;
+  smsTwilioDeliveryChannel?: "sms" | "whatsapp";
+  smsTwilioWhatsappSender?: string;
+  smsTwilioContentSid?: string;
+  smsTwilioSmsFallback?: boolean;
   smsMsg91AuthKey?: string;
   smsMsg91TemplateId?: string;
   smsMsg91SenderId?: string;

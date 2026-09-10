@@ -105,6 +105,8 @@ const PUBLIC_PATHS = [
   // route above, but NOT trusting the instance id: the route verifies a
   // standard-webhooks signature before it will send anything.
   /^\/api\/db-instances\/[^/]+\/sms-hook$/,
+  // Twilio status callbacks authenticate with the Twilio SDK inside the route.
+  /^\/api\/db-instances\/[^/]+\/twilio-status\/[a-f0-9]{64}\/(primary|fallback)$/,
   // Integration guides. Public on purpose: the person doing an
   // MSG91/DLT setup is often at a client or an agency and has no WHARF
   // account. Static content only — nothing under /docs reads an instance,

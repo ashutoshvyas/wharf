@@ -204,3 +204,30 @@ describe("authSettingsUpdateSchema", () => {
     });
   });
 });
+
+describe("Twilio WhatsApp settings", () => {
+  it("accepts SMS and WhatsApp channel choices and fallback", () => {
+    for (const channel of ["sms", "whatsapp"]) {
+      expect(authSettingsUpdateSchema.parse({
+        smsTwilioDeliveryChannel: channel,
+        smsTwilioSmsFallback: true,
+      })).toEqual({ smsTwilioDeliveryChannel: channel, smsTwilioSmsFallback: true });
+    }
+    expect(authSettingsUpdateSchema.safeParse({ smsTwilioDeliveryChannel: "email" }).success).toBe(false);
+    expect(authSettingsUpdateSchema.safeParse({ smsTwilioSmsFallback: "true" }).success).toBe(false);
+  });
+
+  it("accepts only international WhatsApp senders and Content SIDs", () => {
+    for (const sender of ["+14155551234", "whatsapp:+14155551234", ""]) {
+      expect(authSettingsUpdateSchema.safeParse({ smsTwilioWhatsappSender: sender }).success).toBe(true);
+    }
+    for (const sender of ["14155551234", "whatsapp:+0123", "+1\nOTHER=value", "MG123", "https://example.com"]) {
+      expect(authSettingsUpdateSchema.safeParse({ smsTwilioWhatsappSender: sender }).success).toBe(false);
+    }
+    expect(authSettingsUpdateSchema.parse({ smsTwilioContentSid: ` HX${"a".repeat(32)} ` }).smsTwilioContentSid)
+      .toBe(`HX${"a".repeat(32)}`);
+    for (const sid of ["HX123", `MG${"a".repeat(32)}`, `HX${"z".repeat(32)}`]) {
+      expect(authSettingsUpdateSchema.safeParse({ smsTwilioContentSid: sid }).success).toBe(false);
+    }
+  });
+});

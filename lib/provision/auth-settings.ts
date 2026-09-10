@@ -77,6 +77,10 @@ export function decryptAuthSettings(row: InstanceAuthSettings | null): AuthSetti
       : DEFAULT_AUTH_SETTINGS.smsTwilioAuthToken,
     smsTwilioMessageServiceSid:
       row.smsTwilioMessageServiceSid ?? DEFAULT_AUTH_SETTINGS.smsTwilioMessageServiceSid,
+    smsTwilioDeliveryChannel: row.smsTwilioDeliveryChannel === "whatsapp" ? "whatsapp" : "sms",
+    smsTwilioWhatsappSender: row.smsTwilioWhatsappSender ?? "",
+    smsTwilioContentSid: row.smsTwilioContentSid ?? "",
+    smsTwilioSmsFallback: row.smsTwilioSmsFallback ?? false,
     smsMsg91AuthKey: row.smsMsg91AuthKeyEnc
       ? open(row.smsMsg91AuthKeyEnc)
       : DEFAULT_AUTH_SETTINGS.smsMsg91AuthKey,
@@ -129,14 +133,15 @@ export type ApplyAuthSettingsResult = { ok: true } | { busy: string };
  * Throws (rather than returning an error variant) for anything other than a
  * held lock — matching stopInstance/startInstance's convention, where the
  * caller's route maps a "busy" substring in the thrown message to 409 and
- * everything else to 500. Callers should persist the settings row BEFORE
- * calling this, so a restart failure here doesn't lose the operator's input
- * — only the "did it actually take effect on the server" step failed.
+ * everything else to 500. The optional persistence callback runs under the
+ * lock after rendering but before any SSH writes, so new hook configuration
+ * is available when Auth restarts and a busy conflict leaves no saved changes.
  */
 export async function applyAuthSettings(
   instanceId: string,
   settings: AuthSettingsValues,
   emailTemplates?: EmailTemplateValues[],
+  persist?: () => Promise<void>,
 ): Promise<ApplyAuthSettingsResult> {
   const instance = await prisma.dbInstance.findFirst({
     where: { id: instanceId, deletedAt: null },
@@ -176,6 +181,9 @@ export async function applyAuthSettings(
       instanceId: instance.id,
       panelUrl: process.env.PANEL_URL,
     });
+
+    // Persist hook credentials while holding the server lock, before Auth can call back.
+    await persist?.();
 
     await withConnection(instance.serverId, async (conn: SshConnection) => {
       await sftpWrite(conn, `${instance.remotePath}/docker-compose.yml`, composeYaml);

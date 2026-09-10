@@ -62,11 +62,11 @@ function Field({
   children: ReactNode;
 }) {
   return (
-    <div>
-      <label className="label-track mb-1.5 block text-neutral-500">{label}</label>
+    <label className="block">
+      <span className="label-track mb-1.5 block text-neutral-500">{label}</span>
       {children}
-      {hint ? <p className="mt-1 text-xs text-neutral-500">{hint}</p> : null}
-    </div>
+      {hint ? <span className="mt-1 block text-xs text-neutral-500">{hint}</span> : null}
+    </label>
   );
 }
 
@@ -243,6 +243,10 @@ interface FormState {
   smsTwilioAccountSid: string;
   smsTwilioAuthToken: string;
   smsTwilioMessageServiceSid: string;
+  smsTwilioDeliveryChannel: "sms" | "whatsapp";
+  smsTwilioWhatsappSender: string;
+  smsTwilioContentSid: string;
+  smsTwilioSmsFallback: boolean;
   smsMsg91AuthKey: string;
   smsMsg91TemplateId: string;
   smsMsg91SenderId: string;
@@ -291,6 +295,10 @@ function formFromDto(dto: AuthSettingsDto): FormState {
     smsTwilioAccountSid: dto.smsTwilioAccountSid,
     smsTwilioAuthToken: "",
     smsTwilioMessageServiceSid: dto.smsTwilioMessageServiceSid,
+    smsTwilioDeliveryChannel: dto.smsTwilioDeliveryChannel ?? "sms",
+    smsTwilioWhatsappSender: dto.smsTwilioWhatsappSender ?? "",
+    smsTwilioContentSid: dto.smsTwilioContentSid ?? "",
+    smsTwilioSmsFallback: dto.smsTwilioSmsFallback ?? false,
     smsMsg91AuthKey: "",
     smsMsg91TemplateId: dto.smsMsg91TemplateId,
     smsMsg91SenderId: dto.smsMsg91SenderId,
@@ -341,6 +349,10 @@ function toPayload(form: FormState): AuthSettingsUpdatePayload {
     smsTwilioAccountSid: form.smsTwilioAccountSid.trim(),
     ...(form.smsTwilioAuthToken ? { smsTwilioAuthToken: form.smsTwilioAuthToken } : {}),
     smsTwilioMessageServiceSid: form.smsTwilioMessageServiceSid.trim(),
+    smsTwilioDeliveryChannel: form.smsTwilioDeliveryChannel,
+    smsTwilioWhatsappSender: form.smsTwilioWhatsappSender.trim(),
+    smsTwilioContentSid: form.smsTwilioContentSid.trim(),
+    smsTwilioSmsFallback: form.smsTwilioSmsFallback,
     ...(form.smsMsg91AuthKey ? { smsMsg91AuthKey: form.smsMsg91AuthKey } : {}),
     smsMsg91TemplateId: form.smsMsg91TemplateId.trim(),
     smsMsg91SenderId: form.smsMsg91SenderId.trim(),
@@ -655,7 +667,7 @@ export function AuthSettingsForm({ instance, role }: { instance: InstanceDto; ro
                 />
                 <div>
                   <Toggle
-                    label="Auto-confirm phone sign-ups (skip the verification SMS)"
+                    label="Auto-confirm phone sign-ups (skip verification)"
                     checked={form.enablePhoneAutoconfirm}
                     disabled={!canWrite}
                     onChange={(v) => setForm({ ...form, enablePhoneAutoconfirm: v })}
@@ -663,12 +675,12 @@ export function AuthSettingsForm({ instance, role }: { instance: InstanceDto; ro
                   <p className="mt-1 text-xs text-neutral-500">
                     On, a phone number is marked confirmed at sign-up without any code being
                     sent or checked — nothing proves the user controls that number. Off is
-                    the branch that sends a verification SMS, which needs a provider below.
+                    the branch that sends a verification code, which needs a provider below.
                   </p>
                 </div>
 
                 {!form.enablePhoneAutoconfirm && form.smsProvider === "" ? (
-                  <Alert variant="warning" title="No SMS provider selected">
+                  <Alert variant="warning" title="No phone verification provider selected">
                     <p>
                       Verification codes are switched on but nothing can deliver them, so
                       phone sign-up will fail. Pick a provider below, or turn auto-confirm
@@ -678,8 +690,8 @@ export function AuthSettingsForm({ instance, role }: { instance: InstanceDto; ro
                 ) : null}
 
                 <Field
-                  label="SMS provider"
-                  hint="Twilio is delivered by the auth container directly. MSG91 has no driver in GoTrue, so this panel delivers it — the instance calls back here and WHARF sends the message."
+                  label="Phone verification provider"
+                  hint="WHARF sends verification codes through the selected provider. Twilio supports SMS and WhatsApp; MSG91 supports SMS."
                 >
                   <select
                     value={form.smsProvider}
@@ -697,6 +709,22 @@ export function AuthSettingsForm({ instance, role }: { instance: InstanceDto; ro
 
                 {form.smsProvider === "twilio" ? (
                   <>
+                    <Field label="Delivery channel">
+                      <select
+                        aria-label="Delivery channel"
+                        value={form.smsTwilioDeliveryChannel}
+                        disabled={!canWrite}
+                        onChange={(e) => setForm({
+                          ...form,
+                          smsTwilioDeliveryChannel: e.target.value as "sms" | "whatsapp",
+                          smsTwilioSmsFallback: e.target.value === "whatsapp" && form.smsTwilioSmsFallback,
+                        })}
+                        className={INPUT_CLASSES}
+                      >
+                        <option value="sms">SMS</option>
+                        <option value="whatsapp">WhatsApp</option>
+                      </select>
+                    </Field>
                     <Field label="Twilio account SID">
                       <input
                         value={form.smsTwilioAccountSid}
@@ -723,20 +751,71 @@ export function AuthSettingsForm({ instance, role }: { instance: InstanceDto; ro
                         className={INPUT_CLASSES}
                       />
                     </Field>
-                    <Field
-                      label="Twilio message service SID"
-                      hint="The Messaging Service the codes are sent from, not a phone number."
-                    >
-                      <input
-                        value={form.smsTwilioMessageServiceSid}
-                        disabled={!canWrite}
-                        onChange={(e) =>
-                          setForm({ ...form, smsTwilioMessageServiceSid: e.target.value })
-                        }
-                        placeholder="MG..."
-                        className={INPUT_CLASSES}
-                      />
-                    </Field>
+                    {form.smsTwilioDeliveryChannel === "whatsapp" ? (
+                      <>
+                        <Field
+                          label="WhatsApp sender number"
+                          hint="Your registered Twilio WhatsApp sender, including the country code."
+                        >
+                          <input
+                            aria-label="WhatsApp sender number"
+                            value={form.smsTwilioWhatsappSender}
+                            disabled={!canWrite}
+                            onChange={(e) => setForm({ ...form, smsTwilioWhatsappSender: e.target.value })}
+                            placeholder="+14155551234"
+                            className={INPUT_CLASSES}
+                          />
+                        </Field>
+                        <Field
+                          label="WhatsApp authentication template SID"
+                          hint="An approved Twilio authentication template. Variable 1 must contain the verification code."
+                        >
+                          <input
+                            aria-label="WhatsApp authentication template SID"
+                            value={form.smsTwilioContentSid}
+                            disabled={!canWrite}
+                            onChange={(e) => setForm({ ...form, smsTwilioContentSid: e.target.value })}
+                            placeholder="HX..."
+                            className={INPUT_CLASSES}
+                          />
+                        </Field>
+                        <Toggle
+                          label="Use SMS as fallback"
+                          checked={form.smsTwilioSmsFallback}
+                          disabled={!canWrite}
+                          onChange={(v) => setForm({ ...form, smsTwilioSmsFallback: v })}
+                        />
+                        <p className="text-xs text-neutral-500">
+                          If WhatsApp delivery fails, send the same code once by SMS while it
+                          is still valid. Pending or unread messages do not trigger fallback.
+                          SMS charges apply.
+                        </p>
+                      </>
+                    ) : null}
+                    {form.smsTwilioDeliveryChannel === "sms" || form.smsTwilioSmsFallback ? (
+                      <Field
+                        label="Twilio message service SID"
+                        hint="A Twilio Messaging Service with an SMS-capable sender. Used for SMS delivery or fallback."
+                      >
+                        <input
+                          value={form.smsTwilioMessageServiceSid}
+                          disabled={!canWrite}
+                          onChange={(e) =>
+                            setForm({ ...form, smsTwilioMessageServiceSid: e.target.value })
+                          }
+                          placeholder="MG..."
+                          className={INPUT_CLASSES}
+                        />
+                      </Field>
+                    ) : null}
+                    <p className="text-xs text-neutral-500">
+                      WHARF must be reachable to send codes and process fallback. Supabase
+                      generates and verifies the code. Your application uses the normal phone OTP flow.{" "}
+                      <a href="/docs/sms/twilio" target="_blank" rel="noreferrer noopener"
+                        className="text-cobalt-600 underline underline-offset-2 hover:text-cobalt-700">
+                        Twilio setup guide
+                      </a>
+                    </p>
                   </>
                 ) : null}
 
@@ -795,8 +874,7 @@ export function AuthSettingsForm({ instance, role }: { instance: InstanceDto; ro
                     <p className="text-xs text-neutral-500">
                       MSG91 credentials stay in this panel and are never written to the
                       instance. The instance calls WHARF to send each code, so codes stop
-                      going out while the panel is unreachable — Twilio, being native to the
-                      auth container, has no such dependency.{" "}
+                      going out while the panel is unreachable. Twilio delivery also depends on WHARF.{" "}
                       <a
                         href="/docs/sms/msg91"
                         target="_blank"
@@ -850,10 +928,10 @@ export function AuthSettingsForm({ instance, role }: { instance: InstanceDto; ro
                         className={INPUT_CLASSES}
                       />
                     </Field>
-                    {form.smsProvider !== "msg91" ? (
+                    {form.smsProvider === "twilio" && (form.smsTwilioDeliveryChannel === "sms" || form.smsTwilioSmsFallback) ? (
                       <Field
                         label="SMS message template"
-                        hint="Use {{ .Code }} where the code should appear. Leave blank for GoTrue's default."
+                        hint="Use {{ .Code }} where the code should appear. Leave blank for: Your code is {{ .Code }}."
                       >
                         <input
                           value={form.smsTemplate}

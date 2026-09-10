@@ -20,7 +20,8 @@ export type RotationModel =
   | "website"
   | "dbInstance"
   | "instanceAuthSettings"
-  | "instanceSyncSource";
+  | "instanceSyncSource"
+  | "phoneDelivery";
 
 export interface RotationTarget {
   model: RotationModel;
@@ -34,6 +35,7 @@ export interface RotationTarget {
  * drifts, so a new `*Enc` column cannot be forgotten here.
  */
 export const TARGETS: RotationTarget[] = [
+  { model: "phoneDelivery", fields: ["payloadEnc"] },
   {
     model: "server",
     fields: [

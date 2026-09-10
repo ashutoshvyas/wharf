@@ -10,8 +10,8 @@
  *        `*Configured` booleans, matching the existing secrets-reveal route.
  * PATCH: instance.auth-settings.write (admin-only) — sparse update; empty-
  *        string secret fields mean "keep the existing stored value" (see
- *        lib/instances/auth-settings-schema.ts). Settings are saved BEFORE
- *        the apply step runs, so a restart failure never loses the
+ *        lib/instances/auth-settings-schema.ts). Settings are saved under the server lock before restarting
+ *        Auth, so a restart failure never loses the
  *        operator's input — only the "did it take effect on the server"
  *        step is reported as failed.
  *
@@ -21,6 +21,7 @@
 import { NextResponse } from "next/server";
 import type { InstanceEmailTemplate, Prisma } from "@prisma/client";
 import { apiError, requireApiRole, withErrorHandling } from "@/lib/api-helpers";
+import { twilioSettingsError } from "@/lib/sms/twilio-settings";
 import { audit } from "@/lib/audit";
 import { prisma } from "@/lib/db";
 import { authSettingsUpdateSchema } from "@/lib/instances/auth-settings-schema";
@@ -75,6 +76,10 @@ function toDto(
     smsTwilioAccountSid: values.smsTwilioAccountSid,
     smsTwilioAuthTokenConfigured: values.smsTwilioAuthToken !== "",
     smsTwilioMessageServiceSid: values.smsTwilioMessageServiceSid,
+    smsTwilioDeliveryChannel: values.smsTwilioDeliveryChannel,
+    smsTwilioWhatsappSender: values.smsTwilioWhatsappSender,
+    smsTwilioContentSid: values.smsTwilioContentSid,
+    smsTwilioSmsFallback: values.smsTwilioSmsFallback,
     smsMsg91AuthKeyConfigured: values.smsMsg91AuthKey !== "",
     smsMsg91TemplateId: values.smsMsg91TemplateId,
     smsMsg91SenderId: values.smsMsg91SenderId,
@@ -145,6 +150,8 @@ export const PATCH = withErrorHandling(async (req: Request, { params }: Ctx) => 
   // overrides what was actually provided, same "sparse merge" the DB update
   // below performs.
   const prospective: AuthSettingsValues = { ...decryptAuthSettings(existingRow), ...body };
+  const deliveryError = twilioSettingsError(prospective, process.env.PANEL_URL);
+  if (deliveryError) return apiError(400, deliveryError);
 
   // Full state of all 6 flows, not just whichever ones this request touches:
   // applyAuthSettings re-renders the .env from scratch, so any flow left out
@@ -163,25 +170,7 @@ export const PATCH = withErrorHandling(async (req: Request, { params }: Ctx) => 
     return { flow, subject, hasBody: !!bodyHtml };
   });
 
-  // Apply BEFORE persisting: a busy server-lock conflict must leave no
-  // trace, matching every other busy-conflict route in this codebase
-  // (restore/remove/retry all persist nothing on a 409 busy).
-  let applied = true;
-  let applyError: string | undefined;
-  try {
-    const result = await applyAuthSettings(id, prospective, prospectiveTemplates);
-    if ("busy" in result) {
-      return apiError(409, `Server is busy — a '${result.busy}' job is running.`);
-    }
-  } catch (err) {
-    applied = false;
-    applyError = err instanceof Error ? err.message : String(err);
-  }
-
-  // Persist regardless of `applied` — a restart failure must never lose the
-  // operator's input, only report that the server-side apply didn't take.
-  // Plain scalar fields only (never Prisma's {set:...} field-update-operation
-  // form), so this one object is valid for both the create and update below.
+  // Validate and prepare persistence before taking the server lock.
   const data: Partial<Prisma.InstanceAuthSettingsUncheckedCreateInput> = {};
   if (body.disableSignup !== undefined) data.disableSignup = body.disableSignup;
   if (body.enableEmailSignup !== undefined) data.enableEmailSignup = body.enableEmailSignup;
@@ -224,6 +213,10 @@ export const PATCH = withErrorHandling(async (req: Request, { params }: Ctx) => 
   if (body.smsTwilioMessageServiceSid !== undefined) {
     data.smsTwilioMessageServiceSid = body.smsTwilioMessageServiceSid;
   }
+  if (body.smsTwilioDeliveryChannel !== undefined) data.smsTwilioDeliveryChannel = body.smsTwilioDeliveryChannel;
+  if (body.smsTwilioWhatsappSender !== undefined) data.smsTwilioWhatsappSender = body.smsTwilioWhatsappSender;
+  if (body.smsTwilioContentSid !== undefined) data.smsTwilioContentSid = body.smsTwilioContentSid;
+  if (body.smsTwilioSmsFallback !== undefined) data.smsTwilioSmsFallback = body.smsTwilioSmsFallback;
   if (body.smsMsg91AuthKey !== undefined) {
     data.smsMsg91AuthKeyEnc = sealBytes(body.smsMsg91AuthKey);
   }
@@ -250,34 +243,51 @@ export const PATCH = withErrorHandling(async (req: Request, { params }: Ctx) => 
   if (body.appleSecret !== undefined) data.appleSecretEnc = sealBytes(body.appleSecret);
   if (body.appleEmailOptional !== undefined) data.appleEmailOptional = body.appleEmailOptional;
 
-  const settings = await prisma.instanceAuthSettings.upsert({
-    where: { dbInstanceId: id },
-    create: { dbInstanceId: id, ...data },
-    update: data,
-  });
+  let settings = existingRow;
+  let saved = false;
+  const persist = async () => {
+    settings = await prisma.instanceAuthSettings.upsert({
+      where: { dbInstanceId: id },
+      create: { dbInstanceId: id, ...data },
+      update: data,
+    });
 
-  // Only touch rows for flows this request actually mentioned — untouched
-  // flows already carried forward correctly into `prospectiveTemplates`
-  // above without needing a DB write.
-  if (body.emailTemplates) {
-    await Promise.all(
-      body.emailTemplates.map((t) =>
-        prisma.instanceEmailTemplate.upsert({
-          where: { dbInstanceId_flow: { dbInstanceId: id, flow: t.flow } },
-          create: {
-            dbInstanceId: id,
-            flow: t.flow,
-            subject: t.subject ?? null,
-            bodyHtml: t.bodyHtml ?? null,
-          },
-          update: {
-            ...(t.subject !== undefined ? { subject: t.subject } : {}),
-            ...(t.bodyHtml !== undefined ? { bodyHtml: t.bodyHtml } : {}),
-          },
-        }),
-      ),
-    );
+    // Only touch rows for flows this request actually mentioned — untouched
+    // flows already carried forward correctly into `prospectiveTemplates`
+    // above without needing a DB write.
+    if (body.emailTemplates) {
+      await Promise.all(
+        body.emailTemplates.map((t) =>
+          prisma.instanceEmailTemplate.upsert({
+            where: { dbInstanceId_flow: { dbInstanceId: id, flow: t.flow } },
+            create: {
+              dbInstanceId: id,
+              flow: t.flow,
+              subject: t.subject ?? null,
+              bodyHtml: t.bodyHtml ?? null,
+            },
+            update: {
+              ...(t.subject !== undefined ? { subject: t.subject } : {}),
+              ...(t.bodyHtml !== undefined ? { bodyHtml: t.bodyHtml } : {}),
+            },
+          }),
+        ),
+      );
+    }
+
+    saved = true;
+  };
+  let applied = true;
+  let applyError: string | undefined;
+  try {
+    const result = await applyAuthSettings(id, prospective, prospectiveTemplates, persist);
+    if ("busy" in result) return apiError(409, `Server is busy — a '${result.busy}' job is running.`);
+  } catch (err) {
+    applied = false;
+    applyError = err instanceof Error ? err.message : String(err);
   }
+  // Keep input if rendering/connecting failed, but never save on a busy conflict.
+  if (!saved) await persist();
 
   await audit({
     userId: session.user.id,
