@@ -24,8 +24,9 @@
  *     (MITM guard) and mark the server unreachable. Recovery is a deliberate
  *     admin action (clearing the stored fingerprint), never automatic.
  */
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { posix } from "node:path";
+import { pipeline } from "node:stream/promises";
 import { Client, type ClientChannel, type SFTPWrapper } from "ssh2";
 import { open } from "./crypto";
 import { prisma } from "./db";
@@ -329,6 +330,39 @@ export async function sftpWrite(
     // between an actionable log line and a one-word dead end.
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(`sftpWrite ${remotePath}: ${msg}`);
+  }
+}
+
+/**
+ * Copy a remote file through two verified SSH connections without decoding or
+ * buffering the archive in the panel. Node's pipeline supplies backpressure;
+ * a private temporary destination is renamed only after a complete transfer.
+ */
+export async function sftpCopyFile(
+  source: Client,
+  sourcePath: string,
+  destination: Client,
+  destinationPath: string,
+  timeoutMs = 60 * 60_000,
+): Promise<void> {
+  const [src, dst] = await Promise.all([getSftp(source), getSftp(destination)]);
+  const tmpPath = `${destinationPath}.partial-${randomUUID()}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    await pipeline(
+      src.createReadStream(sourcePath, { highWaterMark: 256 * 1024 }),
+      dst.createWriteStream(tmpPath, { flags: "wx", mode: 0o600, highWaterMark: 256 * 1024 }),
+      { signal: controller.signal },
+    );
+    await sftpCall((cb) => dst.rename(tmpPath, destinationPath, cb));
+  } catch {
+    await sftpCall((cb) => dst.unlink(tmpPath, cb)).catch(() => {});
+    // SSH/SFTP errors may include transport diagnostics. Archive contents and
+    // connection details do not belong in a user-visible clone log.
+    throw new Error(controller.signal.aborted ? "Database archive transfer timed out." : "Database archive transfer failed.");
+  } finally {
+    clearTimeout(timer);
   }
 }
 

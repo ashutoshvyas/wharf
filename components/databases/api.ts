@@ -48,10 +48,10 @@ export interface InstanceDto {
   status: InstanceStatus;
   /**
    * Which engine currently holds a live job — `restoring` alone is
-   * ambiguous, since restore and sync share it but stream different logs.
+   * ambiguous, since restore, sync and clone share it but stream different logs.
    * `null` when nothing is running (including after a panel restart).
    */
-  activeJob: "provision" | "remove" | "restore" | "sync" | null;
+  activeJob: "provision" | "remove" | "restore" | "sync" | "clone" | null;
   /** Tail of the last action's log — errors keep their evidence (design §6). */
   lastActionLog: string | null;
   healthCheckedAt: string | null;
@@ -64,6 +64,10 @@ export interface JobAcceptedDto {
   /** Present on create; retry/remove return only a jobId. */
   id?: string;
   jobId: string;
+}
+
+export interface CloneAcceptedDto extends JobAcceptedDto {
+  targetInstanceId: string;
 }
 
 export interface CreateInstancePayload {
@@ -560,6 +564,23 @@ export function restoreLogUrl(id: string): string {
 /** SSE endpoint for a live-source sync job. */
 export function syncLogUrl(id: string): string {
   return `/api/db-instances/${id}/sync-log`;
+}
+
+/** Clone jobs are streamed from the destination instance. */
+export function cloneLogUrl(targetInstanceId: string): string {
+  return `/api/db-instances/${targetInstanceId}/clone-log`;
+}
+
+/** Copy a live WHARF database into another, with destination-name confirmation. */
+export async function cloneInstance(
+  sourceInstanceId: string,
+  targetInstanceId: string,
+  confirmName: string,
+): Promise<CloneAcceptedDto> {
+  return apiFetch<CloneAcceptedDto>(
+    `/api/db-instances/${sourceInstanceId}/clone`,
+    jsonInit("POST", { targetInstanceId, confirmName }),
+  );
 }
 
 export const SYNC_SOURCE_QUERY_KEY = ["db-instance-sync-source"] as const;

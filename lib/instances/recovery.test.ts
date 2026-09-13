@@ -139,6 +139,7 @@ describe("sweepStaleJobs", () => {
   it.each([
     ["restore", "restore:inst-1"],
     ["sync", "sync:inst-1"],
+    ["clone", "clone:inst-1"],
   ])("skips a restoring row whose %s job is still live", async (_label, liveId) => {
     db.dbInstance.findMany.mockResolvedValue([staleRow({ status: "restoring" })] as never);
     mockActive.mockImplementation((jobId: string) => jobId === liveId);

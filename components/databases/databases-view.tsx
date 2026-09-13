@@ -30,6 +30,7 @@ import {
   type InstanceDto,
 } from "./api";
 import { InstanceCard } from "./instance-card";
+import { CloneDatabaseModal } from "./clone-database-modal";
 import { LogTailModal } from "./log-tail-modal";
 import { NewInstanceModal } from "./new-instance-modal";
 import { jobKindFor, ProvisionProgress, type JobKind } from "./provision-progress";
@@ -62,6 +63,8 @@ export function DatabasesView({
   const [removeFor, setRemoveFor] = useState<InstanceDto | null>(null);
   const [forceRemove, setForceRemove] = useState(false);
   const [restoreFor, setRestoreFor] = useState<InstanceDto | null>(null);
+  const [cloneFor, setCloneFor] = useState<InstanceDto | null>(null);
+  const [modalCloningId, setModalCloningId] = useState<string | null>(null);
   const [sslModeFor, setSslModeFor] = useState<InstanceDto | null>(null);
   /**
    * The dialog's job kind is tracked explicitly here rather than derived from
@@ -123,7 +126,8 @@ export function DatabasesView({
     return (
       progress?.instance.id === instance.id ||
       modalProvisioningId === instance.id ||
-      restoreFor?.id === instance.id
+      restoreFor?.id === instance.id ||
+      modalCloningId === instance.id
     );
   }
 
@@ -197,6 +201,9 @@ export function DatabasesView({
               onRestore={() => {
                 if (canRestore) setRestoreFor(instance);
               }}
+              onClone={() => {
+                if (canRestore) setCloneFor(instance);
+              }}
               onSslMode={() => setSslModeFor(instance)}
               onExpandProgress={() => setProgress({ instance, kind: jobKindFor(instance) })}
             />
@@ -255,14 +262,14 @@ export function DatabasesView({
                   : `${instance.name} could not be removed — see log.`,
               variant: status === "ok" ? "info" : "danger",
             });
-          } else if (kind === "restore" || kind === "sync") {
-            const verb = kind === "sync" ? "synced" : "restored";
+          } else if (kind === "restore" || kind === "sync" || kind === "clone") {
+            const verb = kind === "clone" ? "cloned" : kind === "sync" ? "synced" : "restored";
             toast({
-              title: status === "ok" ? (kind === "sync" ? "Synced" : "Restored") : undefined,
+              title: status === "ok" ? (kind === "clone" ? "Database cloned" : kind === "sync" ? "Synced" : "Restored") : undefined,
               message:
                 status === "ok"
                   ? `${instance.name} ${verb} — a snapshot of its previous data was kept on the server.`
-                  : `${instance.name} ${kind === "sync" ? "sync" : "restore"} failed — see log.`,
+                  : `${instance.name} ${kind} failed — see log.`,
               variant: status === "ok" ? "success" : "danger",
             });
           } else {
@@ -329,6 +336,23 @@ export function DatabasesView({
         onClose={() => setRestoreFor(null)}
         instance={restoreFor}
       />
+
+      {cloneFor ? (
+        <CloneDatabaseModal
+          key={cloneFor.id}
+          source={cloneFor}
+          instances={rows}
+          onCloning={setModalCloningId}
+          onClose={() => {
+            setCloneFor(null);
+            setModalCloningId(null);
+          }}
+          onNewInstance={() => {
+            setCloneFor(null);
+            setNewOpen(true);
+          }}
+        />
+      ) : null}
     </div>
   );
 }
@@ -338,6 +362,7 @@ const PROGRESS_DIALOG_TITLE: Record<JobKind, string> = {
   remove: "Removing",
   restore: "Restoring",
   sync: "Syncing",
+  clone: "Cloning",
 };
 
 /**

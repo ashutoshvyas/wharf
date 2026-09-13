@@ -20,7 +20,7 @@
 import { audit } from "@/lib/audit";
 import { prisma } from "@/lib/db";
 import { isJobActive } from "@/lib/jobs/stream";
-import { provisionJobId, removeJobId, restoreJobId, syncJobId } from "@/lib/provision/job-ids";
+import { cloneJobId, provisionJobId, removeJobId, restoreJobId, syncJobId } from "@/lib/provision/job-ids";
 
 /** A job untouched for this long with no live stream is presumed dead. */
 export const STALE_AFTER_MS = 10 * 60 * 1000;
@@ -47,9 +47,8 @@ export async function sweepStaleJobs(): Promise<number> {
 
   const candidates = await prisma.dbInstance.findMany({
     where: {
-      // `restoring` covers both engines that overwrite data in place —
-      // restore.ts and sync.ts share the status, and each
-      // has its own job id, so both are checked for liveness below.
+      // Restore, external sync, and managed clone share this status and
+      // each has its own job id, checked for liveness below.
       status: { in: ["provisioning", "removing", "restoring"] },
       updatedAt: { lt: cutoff },
     },
@@ -58,7 +57,7 @@ export async function sweepStaleJobs(): Promise<number> {
 
   let swept = 0;
   for (const row of candidates) {
-    const live = [provisionJobId, removeJobId, restoreJobId, syncJobId].some((jobId) =>
+    const live = [provisionJobId, removeJobId, restoreJobId, syncJobId, cloneJobId].some((jobId) =>
       isJobActive(jobId(row.id)),
     );
     if (live) continue;

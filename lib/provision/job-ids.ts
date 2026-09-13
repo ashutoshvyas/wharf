@@ -24,3 +24,8 @@ export function restoreJobId(instanceId: string): string {
 export function syncJobId(instanceId: string): string {
   return `sync:${instanceId}`;
 }
+
+/** A clone job belongs to its destination; the source remains running. */
+export function cloneJobId(instanceId: string): string {
+  return `clone:${instanceId}`;
+}

@@ -12,6 +12,7 @@
  */
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
+import { Readable, Writable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // ---------------------------------------------------------------------------
@@ -99,6 +100,7 @@ import {
   SshTimeoutError,
   checkReachable,
   exec,
+  sftpCopyFile,
   sftpWrite,
   withConnection,
 } from "./ssh";
@@ -576,6 +578,70 @@ describe("sftpWrite", () => {
 
     expect(conn.sftp).toHaveBeenCalledTimes(2);
     expect(second.calls.some((c) => c.startsWith("writeFile:/opt/app/b"))).toBe(true);
+  });
+});
+
+describe("sftpCopyFile", () => {
+  function connectionFor(sftp: EventEmitter): Conn {
+    return {
+      sftp: (cb: (err: Error | undefined, value: unknown) => void) => {
+        queueMicrotask(() => cb(undefined, sftp));
+        return true;
+      },
+    } as unknown as Conn;
+  }
+
+  it("streams arbitrary binary bytes with backpressure and atomically renames the complete file", async () => {
+    const bytes = Buffer.from([0, 255, 1, 2, 128, 10, 13, 0]);
+    const written: Buffer[] = [];
+    const sourceSftp = Object.assign(new EventEmitter(), {
+      createReadStream: vi.fn(() => Readable.from([bytes.subarray(0, 3), bytes.subarray(3)])),
+    });
+    const destinationSftp = Object.assign(new EventEmitter(), {
+      createWriteStream: vi.fn(() => new Writable({
+        write(chunk, _encoding, callback) { written.push(Buffer.from(chunk)); callback(); },
+      })),
+      rename: vi.fn((_from: string, _to: string, cb: (err: Error | null) => void) => cb(null)),
+      unlink: vi.fn((_path: string, cb: (err: Error | null) => void) => cb(null)),
+    });
+
+    await sftpCopyFile(
+      connectionFor(sourceSftp),
+      "/source/database.dump",
+      connectionFor(destinationSftp),
+      "/destination/database.dump",
+    );
+
+    expect(Buffer.concat(written)).toEqual(bytes);
+    expect(destinationSftp.createWriteStream).toHaveBeenCalledWith(
+      expect.stringMatching(/^\/destination\/database\.dump\.partial-/),
+      expect.objectContaining({ flags: "wx", mode: 0o600 }),
+    );
+    expect(destinationSftp.rename).toHaveBeenCalledWith(
+      expect.stringMatching(/^\/destination\/database\.dump\.partial-/),
+      "/destination/database.dump",
+      expect.any(Function),
+    );
+    expect(destinationSftp.unlink).not.toHaveBeenCalled();
+  });
+
+  it("removes the partial destination and hides transport diagnostics on failure", async () => {
+    const source = new Readable({
+      read() { this.destroy(new Error("private transport detail")); },
+    });
+    const sourceSftp = Object.assign(new EventEmitter(), { createReadStream: vi.fn(() => source) });
+    const destinationSftp = Object.assign(new EventEmitter(), {
+      createWriteStream: vi.fn(() => new Writable({ write(_chunk, _encoding, callback) { callback(); } })),
+      rename: vi.fn(),
+      unlink: vi.fn((_path: string, cb: (err: Error | null) => void) => cb(null)),
+    });
+
+    await expect(sftpCopyFile(
+      connectionFor(sourceSftp), "/source/database.dump",
+      connectionFor(destinationSftp), "/destination/database.dump",
+    )).rejects.toThrow("Database archive transfer failed.");
+    expect(destinationSftp.unlink).toHaveBeenCalledOnce();
+    expect(destinationSftp.rename).not.toHaveBeenCalled();
   });
 });
 

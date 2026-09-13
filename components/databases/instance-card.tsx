@@ -13,6 +13,7 @@
 import Link from "next/link";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
+  Copy,
   Ellipsis,
   KeyRound,
   RotateCcw,
@@ -48,6 +49,7 @@ export interface InstanceCardProps {
   onRetry: () => void;
   onRemove: () => void;
   onRestore: () => void;
+  onClone: () => void;
   onSslMode: () => void;
   /** Opens the full-size progress dialog for this instance. */
   onExpandProgress: () => void;
@@ -63,6 +65,7 @@ export function InstanceCard({
   onRetry,
   onRemove,
   onRestore,
+  onClone,
   onSslMode,
   onExpandProgress,
   silentProgress = false,
@@ -134,6 +137,11 @@ export function InstanceCard({
       : []),
     ...(instance.status === "running" && canRestore
       ? [
+          {
+            label: "Clone database…",
+            icon: <Copy size={15} strokeWidth={1.75} />,
+            onSelect: onClone,
+          } satisfies DropdownItem,
           {
             label: "Restore / Sync…",
             icon: <Upload size={15} strokeWidth={1.75} />,
@@ -238,12 +246,13 @@ export function InstanceCard({
                 variant: status === "ok" ? "info" : "danger",
               });
             } else if (instance.status === "restoring") {
-              const verb = instance.activeJob === "sync" ? "sync" : "restore";
+              const verb = instance.activeJob === "clone" ? "clone" : instance.activeJob === "sync" ? "sync" : "restore";
+              const completed = verb === "clone" ? "cloned" : verb === "sync" ? "synced" : "restored";
               toast({
-                title: status === "ok" ? (verb === "sync" ? "Synced" : "Restored") : undefined,
+                title: status === "ok" ? (verb === "clone" ? "Database cloned" : verb === "sync" ? "Synced" : "Restored") : undefined,
                 message:
                   status === "ok"
-                    ? `${instance.name} ${verb === "sync" ? "synced" : "restored"} — a snapshot of its previous data was kept on the server.`
+                    ? `${instance.name} ${completed} — a snapshot of its previous data was kept on the server.`
                     : `${instance.name} ${verb} failed — see log.`,
                 variant: status === "ok" ? "success" : "danger",
               });

@@ -12,7 +12,7 @@
  * never has to express "removed".
  *
  * `activeJob` is the one DERIVED field: `status` alone no longer
- * identifies which engine is running, because restore.ts and sync.ts share
+ * identifies which engine is running, because restore.ts, sync.ts and clone.ts share
  * the `restoring` status but stream under different job ids. The fleet card
  * needs to know which log to follow, so the job registry (in-process, same
  * argument as lib/rate-limit.ts) is consulted here. `null` means no live job
@@ -21,6 +21,7 @@
  */
 import { isJobActive } from "@/lib/jobs/stream";
 import {
+  cloneJobId,
   provisionJobId,
   removeJobId,
   restoreJobId,
@@ -67,13 +68,14 @@ export interface DbInstanceRecord {
 }
 
 /** Which engine currently holds a live job for this instance. */
-export type ActiveJobKind = "provision" | "remove" | "restore" | "sync";
+export type ActiveJobKind = "provision" | "remove" | "restore" | "sync" | "clone";
 
 const JOB_KINDS: readonly [ActiveJobKind, (id: string) => string][] = [
   ["provision", provisionJobId],
   ["remove", removeJobId],
   ["restore", restoreJobId],
   ["sync", syncJobId],
+  ["clone", cloneJobId],
 ];
 
 export function activeJobKind(instanceId: string): ActiveJobKind | null {

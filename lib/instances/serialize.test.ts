@@ -138,7 +138,7 @@ describe("serializeInstance", () => {
  */
 describe("activeJob", () => {
   afterEach(() => {
-    for (const prefix of ["provision", "remove", "restore", "sync"]) {
+    for (const prefix of ["provision", "remove", "restore", "sync", "clone"]) {
       endJob(`${prefix}:inst-1`, "ok");
     }
   });
@@ -152,6 +152,7 @@ describe("activeJob", () => {
     ["remove", "remove:inst-1"],
     ["restore", "restore:inst-1"],
     ["sync", "sync:inst-1"],
+    ["clone", "clone:inst-1"],
   ])("reports a live %s job", (kind, jobId) => {
     startJob(jobId);
     expect(serializeInstance(fullRow()).activeJob).toBe(kind);

@@ -25,9 +25,9 @@ import { Button } from "@/components/ui/button";
 import { LogStream, type LogLine, type LogLineKind } from "@/components/ui/log-stream";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { useJobStream } from "@/components/servers/use-job-stream";
-import { instanceLogUrl, restoreLogUrl, syncLogUrl, type InstanceDto } from "./api";
+import { cloneLogUrl, instanceLogUrl, restoreLogUrl, syncLogUrl, type InstanceDto } from "./api";
 
-export type JobKind = "provision" | "remove" | "restore" | "sync";
+export type JobKind = "provision" | "remove" | "restore" | "sync" | "clone";
 export type PhaseState = "pending" | "active" | "done" | "failed";
 
 /**
@@ -97,6 +97,16 @@ export const SYNC_PHASES: readonly PhaseDef[] = [
   { id: "cleanup", label: "Clean up" },
 ];
 
+export const CLONE_PHASES: readonly PhaseDef[] = [
+  { id: "preflight", label: "Check source and destination" },
+  { id: "dump", label: "Back up source database" },
+  { id: "transfer", label: "Transfer backup" },
+  { id: "snapshot", label: "Snapshot destination data" },
+  { id: "restore", label: "Restore destination" },
+  { id: "verify", label: "Verify cloned database" },
+  { id: "cleanup", label: "Clean up" },
+];
+
 export interface PhaseRow {
   id: string;
   label: string;
@@ -116,6 +126,7 @@ export function phaseDefs(kind: JobKind): readonly PhaseDef[] {
   if (kind === "remove") return REMOVE_PHASES;
   if (kind === "restore") return RESTORE_PHASES;
   if (kind === "sync") return SYNC_PHASES;
+  if (kind === "clone") return CLONE_PHASES;
   return PROVISION_PHASES;
 }
 
@@ -234,7 +245,7 @@ export function PhaseChecklist({
               ) : phase.state === "failed" ? (
                 <X size={11} strokeWidth={2.5} />
               ) : phase.state === "active" ? (
-                <span className="h-2 w-2 animate-spark-fast rounded-full bg-coral-500" />
+                <span className="h-2 w-2 animate-spark-fast rounded-full bg-coral-500 motion-reduce:animate-none" />
               ) : (
                 i + 1
               )}
@@ -258,7 +269,7 @@ export function PhaseChecklist({
 
 export interface ProvisionProgressProps {
   instanceId: string;
-  /** `provision` (also retry) or `remove` — picks the phase table. */
+  /** Picks the job's stream and phase table. */
   kind: JobKind;
   /** Mono title for the log chrome bar, e.g. `sb_4f2a · vps-01`. */
   title: string;
@@ -281,11 +292,13 @@ export function ProvisionProgress({
   className,
 }: ProvisionProgressProps) {
   const { status, lines, reconnect } = useJobStream(
-    kind === "restore"
-      ? restoreLogUrl(instanceId)
-      : kind === "sync"
-        ? syncLogUrl(instanceId)
-        : instanceLogUrl(instanceId),
+    kind === "clone"
+      ? cloneLogUrl(instanceId)
+      : kind === "restore"
+        ? restoreLogUrl(instanceId)
+        : kind === "sync"
+          ? syncLogUrl(instanceId)
+          : instanceLogUrl(instanceId),
   );
   const phases = derivePhases(lines, kind);
   const handledRef = useRef(false);
@@ -310,7 +323,7 @@ export function ProvisionProgress({
     status === "streaming"
       ? kind === "remove"
         ? "removing"
-        : kind === "restore" || kind === "sync"
+        : kind === "restore" || kind === "sync" || kind === "clone"
           ? "restoring"
           : "provisioning"
       : status === "ok"
