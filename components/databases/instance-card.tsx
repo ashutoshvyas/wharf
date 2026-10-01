@@ -10,7 +10,9 @@
  * Nothing here flips status optimistically: stop/start show in-button
  * progress and the badge only moves when the server confirms (design §6).
  */
+import { Fragment } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Copy,
@@ -55,6 +57,7 @@ export interface InstanceCardProps {
   onExpandProgress: () => void;
   /** A progress dialog is already open for this instance — it owns the toast. */
   silentProgress?: boolean;
+  layout?: "cards" | "list";
 }
 
 export function InstanceCard({
@@ -69,9 +72,11 @@ export function InstanceCard({
   onSslMode,
   onExpandProgress,
   silentProgress = false,
+  layout = "cards",
 }: InstanceCardProps) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const router = useRouter();
 
   const canStopStart = can(role, "instance.stopstart");
   const canRetry = can(role, "instance.retry");
@@ -103,23 +108,28 @@ export function InstanceCard({
   });
 
   const menuItems: DropdownItem[] = [
+    {
+      label: "Network access…",
+      icon: <ShieldCheck size={15} strokeWidth={1.75} />,
+      onSelect: () => router.push(`/databases/${instance.id}/network-access`),
+    },
     ...(canReveal
       ? [
-          {
-            label: "Connection & secrets",
-            icon: <KeyRound size={15} strokeWidth={1.75} />,
-            onSelect: onSecrets,
-          } satisfies DropdownItem,
-        ]
+        {
+          label: "Connection & secrets",
+          icon: <KeyRound size={15} strokeWidth={1.75} />,
+          onSelect: onSecrets,
+        } satisfies DropdownItem,
+      ]
       : []),
     ...(canChangeSslMode
       ? [
-          {
-            label: "Change SSL mode…",
-            icon: <ShieldCheck size={15} strokeWidth={1.75} />,
-            onSelect: onSslMode,
-          } satisfies DropdownItem,
-        ]
+        {
+          label: "Change SSL mode…",
+          icon: <ShieldCheck size={15} strokeWidth={1.75} />,
+          onSelect: onSslMode,
+        } satisfies DropdownItem,
+      ]
       : []),
     {
       label: "View last log",
@@ -128,41 +138,179 @@ export function InstanceCard({
     },
     ...(isError && canRetry
       ? [
-          {
-            label: "Retry provisioning",
-            icon: <RotateCcw size={15} strokeWidth={1.75} />,
-            onSelect: onRetry,
-          } satisfies DropdownItem,
-        ]
+        {
+          label: "Retry provisioning",
+          icon: <RotateCcw size={15} strokeWidth={1.75} />,
+          onSelect: onRetry,
+        } satisfies DropdownItem,
+      ]
       : []),
     ...(instance.status === "running" && canRestore
       ? [
-          {
-            label: "Clone database…",
-            icon: <Copy size={15} strokeWidth={1.75} />,
-            onSelect: onClone,
-          } satisfies DropdownItem,
-          {
-            label: "Restore / Sync…",
-            icon: <Upload size={15} strokeWidth={1.75} />,
-            onSelect: onRestore,
-          } satisfies DropdownItem,
-        ]
+        {
+          label: "Clone database…",
+          icon: <Copy size={15} strokeWidth={1.75} />,
+          onSelect: onClone,
+        } satisfies DropdownItem,
+        {
+          label: "Restore / Sync…",
+          icon: <Upload size={15} strokeWidth={1.75} />,
+          onSelect: onRestore,
+        } satisfies DropdownItem,
+      ]
       : []),
     ...(canRemove
       ? [
-          { type: "separator" as const },
-          {
-            label: "Remove permanently…",
-            icon: <Trash2 size={15} strokeWidth={1.75} />,
-            danger: true,
-            onSelect: onRemove,
-          } satisfies DropdownItem,
-        ]
+        { type: "separator" as const },
+        {
+          label: "Remove permanently…",
+          icon: <Trash2 size={15} strokeWidth={1.75} />,
+          danger: true,
+          onSelect: onRemove,
+        } satisfies DropdownItem,
+      ]
       : []),
   ];
 
   const serverName = instance.server?.name ?? "unknown server";
+
+  const controls = busy ? (
+    <ProvisionProgress
+      instanceId={instance.id}
+      kind={jobKindFor(instance)}
+      title={`${instance.composeProjectName} · ${serverName}`}
+      compact
+      onExpand={onExpandProgress}
+      onTerminal={(status) => {
+        void queryClient.invalidateQueries({ queryKey: INSTANCES_QUERY_KEY });
+        // A successful provision may have just prepared the server for
+        // the first time (architecture §4.1) — refresh its cached query
+        // too, or its detail page (and the "Re-run setup" button) stays
+        // stale until something unrelated triggers a refetch. Restore
+        // never touches bootstrap state, so it doesn't need this.
+        if (instance.status === "provisioning" && status === "ok") {
+          void queryClient.invalidateQueries({ queryKey: ["server", instance.serverId] });
+          void queryClient.invalidateQueries({ queryKey: ["servers"] });
+        }
+        if (silentProgress) return;
+        if (instance.status === "removing") {
+          toast({
+            message:
+              status === "ok"
+                ? `${instance.name} removed — volumes destroyed.`
+                : `${instance.name} could not be removed — see log.`,
+            variant: status === "ok" ? "info" : "danger",
+          });
+        } else if (instance.status === "restoring") {
+          const verb = instance.activeJob === "clone" ? "clone" : instance.activeJob === "sync" ? "sync" : "restore";
+          const completed = verb === "clone" ? "cloned" : verb === "sync" ? "synced" : "restored";
+          toast({
+            title: status === "ok" ? (verb === "clone" ? "Database cloned" : verb === "sync" ? "Synced" : "Restored") : undefined,
+            message:
+              status === "ok"
+                ? `${instance.name} ${completed} — a snapshot of its previous data was kept on the server.`
+                : `${instance.name} ${verb} failed — see log.`,
+            variant: status === "ok" ? "success" : "danger",
+          });
+        } else {
+          toast({
+            title: status === "ok" ? "Provisioned" : undefined,
+            message:
+              status === "ok"
+                ? `${instance.name} is running.`
+                : `${instance.name} failed to provision — see log.`,
+            variant: status === "ok" ? "success" : "danger",
+          });
+        }
+      }}
+    />
+  ) : (
+    <div className="mt-auto flex flex-wrap items-center gap-2">
+      {instance.status === "running" ? (
+        <ButtonLink
+          href={`/databases/${instance.id}/manage`}
+          variant="primary"
+          size="sm"
+        >
+          Manage
+        </ButtonLink>
+      ) : null}
+      {instance.status === "running" && canStopStart ? (
+        <Button
+          variant="secondary"
+          size="sm"
+          disabled={power.isPending}
+          onClick={() => power.mutate("stop")}
+        >
+          {power.isPending ? "Stopping…" : "Stop"}
+        </Button>
+      ) : null}
+      {instance.status === "stopped" && canStopStart ? (
+        <Button
+          variant="secondary"
+          size="sm"
+          disabled={power.isPending}
+          onClick={() => power.mutate("start")}
+        >
+          {power.isPending ? "Starting…" : "Start"}
+        </Button>
+      ) : null}
+      {isError && canRetry ? (
+        <Button variant="secondary" size="sm" onClick={onRetry}>
+          <RotateCcw size={14} strokeWidth={1.75} aria-hidden />
+          Retry
+        </Button>
+      ) : null}
+      <span className="flex-1" />
+      <DropdownMenu
+        align="end"
+        trigger={
+          <button
+            type="button"
+            aria-label={`Actions for ${instance.name}`}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-[6px] text-neutral-400 transition-colors hover:bg-cobalt-50 hover:text-cobalt-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cobalt-400"
+          >
+            <Ellipsis size={16} strokeWidth={1.75} />
+          </button>
+        }
+        items={menuItems}
+      />
+    </div>
+  );
+
+  if (layout === "list") {
+    const cell = "border-b border-neutral-100 px-4 py-3 align-middle text-sm";
+    return (
+      <Fragment>
+        <tr className="hover:bg-neutral-50">
+          <td className={cell}>
+            <div className="min-w-36 font-semibold">{instance.name}</div>
+            <div className="mt-1 font-mono text-xs text-neutral-500">{instance.composeProjectName}</div>
+          </td>
+          <td className={cell}>
+            <Link href={`/servers/${instance.serverId}`} className="text-cobalt-600 hover:underline">{serverName}</Link>
+            <div className="mt-1 whitespace-nowrap font-mono text-xs text-neutral-500">{instance.server?.host ?? "—"}</div>
+          </td>
+          <td className={cell}>
+            <div className="min-w-44 max-w-64 space-y-1">
+              <MonoField value={instance.apiSubdomain} />
+              <MonoField value={instance.studioSubdomain} />
+            </div>
+          </td>
+          <td className={cell}>
+            <StatusBadge status={instance.status} />
+            {isError && <button type="button" className="mt-1 block text-xs text-danger underline" onClick={onViewLog}>View log</button>}
+          </td>
+          <td className={cell}><span className="whitespace-nowrap text-xs">{instance.sslMode === "require" ? "Required" : "Not enforced"}</span></td>
+          <td className={cell}><span className="whitespace-nowrap text-xs text-neutral-500">{formatDate(instance.createdAt)}</span></td>
+          <td className={cell}>
+            {busy ? <Button variant="secondary" size="sm" onClick={onExpandProgress}>View progress</Button> : controls}
+          </td>
+        </tr>
+        {busy && <tr><td colSpan={7} className="border-b border-neutral-100 bg-neutral-50 px-4 py-3">{controls}</td></tr>}
+      </Fragment>
+    );
+  }
 
   return (
     <Card glow={busy} hoverable={!busy} className="flex flex-col p-5">
@@ -179,7 +327,7 @@ export function InstanceCard({
           href={`/servers/${instance.serverId}`}
           className="text-neutral-500 underline-offset-2 hover:text-cobalt-600 hover:underline"
         >
-          {serverName}
+          {serverName}{instance.server?.host ? ` · ${instance.server.host}` : ""}
         </Link>
       </div>
 
@@ -218,109 +366,7 @@ export function InstanceCard({
         </Alert>
       ) : null}
 
-      {busy ? (
-        <ProvisionProgress
-          instanceId={instance.id}
-          kind={jobKindFor(instance)}
-          title={`${instance.composeProjectName} · ${serverName}`}
-          compact
-          onExpand={onExpandProgress}
-          onTerminal={(status) => {
-            void queryClient.invalidateQueries({ queryKey: INSTANCES_QUERY_KEY });
-            // A successful provision may have just prepared the server for
-            // the first time (architecture §4.1) — refresh its cached query
-            // too, or its detail page (and the "Re-run setup" button) stays
-            // stale until something unrelated triggers a refetch. Restore
-            // never touches bootstrap state, so it doesn't need this.
-            if (instance.status === "provisioning" && status === "ok") {
-              void queryClient.invalidateQueries({ queryKey: ["server", instance.serverId] });
-              void queryClient.invalidateQueries({ queryKey: ["servers"] });
-            }
-            if (silentProgress) return;
-            if (instance.status === "removing") {
-              toast({
-                message:
-                  status === "ok"
-                    ? `${instance.name} removed — volumes destroyed.`
-                    : `${instance.name} could not be removed — see log.`,
-                variant: status === "ok" ? "info" : "danger",
-              });
-            } else if (instance.status === "restoring") {
-              const verb = instance.activeJob === "clone" ? "clone" : instance.activeJob === "sync" ? "sync" : "restore";
-              const completed = verb === "clone" ? "cloned" : verb === "sync" ? "synced" : "restored";
-              toast({
-                title: status === "ok" ? (verb === "clone" ? "Database cloned" : verb === "sync" ? "Synced" : "Restored") : undefined,
-                message:
-                  status === "ok"
-                    ? `${instance.name} ${completed} — a snapshot of its previous data was kept on the server.`
-                    : `${instance.name} ${verb} failed — see log.`,
-                variant: status === "ok" ? "success" : "danger",
-              });
-            } else {
-              toast({
-                title: status === "ok" ? "Provisioned" : undefined,
-                message:
-                  status === "ok"
-                    ? `${instance.name} is running.`
-                    : `${instance.name} failed to provision — see log.`,
-                variant: status === "ok" ? "success" : "danger",
-              });
-            }
-          }}
-        />
-      ) : (
-        <div className="mt-auto flex flex-wrap items-center gap-2">
-          {instance.status === "running" ? (
-            <ButtonLink
-              href={`/databases/${instance.id}/manage`}
-              variant="primary"
-              size="sm"
-            >
-              Manage
-            </ButtonLink>
-          ) : null}
-          {instance.status === "running" && canStopStart ? (
-            <Button
-              variant="secondary"
-              size="sm"
-              disabled={power.isPending}
-              onClick={() => power.mutate("stop")}
-            >
-              {power.isPending ? "Stopping…" : "Stop"}
-            </Button>
-          ) : null}
-          {instance.status === "stopped" && canStopStart ? (
-            <Button
-              variant="secondary"
-              size="sm"
-              disabled={power.isPending}
-              onClick={() => power.mutate("start")}
-            >
-              {power.isPending ? "Starting…" : "Start"}
-            </Button>
-          ) : null}
-          {isError && canRetry ? (
-            <Button variant="secondary" size="sm" onClick={onRetry}>
-              <RotateCcw size={14} strokeWidth={1.75} aria-hidden />
-              Retry
-            </Button>
-          ) : null}
-          <span className="flex-1" />
-          <DropdownMenu
-            align="end"
-            trigger={
-              <button
-                type="button"
-                aria-label={`Actions for ${instance.name}`}
-                className="inline-flex h-8 w-8 items-center justify-center rounded-[6px] text-neutral-400 transition-colors hover:bg-cobalt-50 hover:text-cobalt-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cobalt-400"
-              >
-                <Ellipsis size={16} strokeWidth={1.75} />
-              </button>
-            }
-            items={menuItems}
-          />
-        </div>
-      )}
+      {controls}
 
     </Card>
   );

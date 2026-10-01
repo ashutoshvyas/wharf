@@ -1,0 +1,11 @@
+[Unit]
+Description=Restore WHARF database firewall rules after reboot or container changes
+
+[Timer]
+OnBootSec=15s
+OnUnitActiveSec=30s
+AccuracySec=1s
+Unit=wharf-pooler-firewall.service
+
+[Install]
+WantedBy=timers.target

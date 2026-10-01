@@ -2,6 +2,8 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   output: "standalone",
+  // Provisioning and firewall setup load these artifacts by name at runtime.
+  outputFileTracingIncludes: { "/api/**/*": ["./templates/**/*"] },
   // ssh2 ships a native addon (sshcrypto.node) — it must stay a runtime
   // require on the server, never webpack-bundled.
   serverExternalPackages: ["ssh2"],

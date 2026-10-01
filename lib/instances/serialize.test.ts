@@ -15,7 +15,7 @@ import {
 } from "./serialize";
 
 /** A fully-populated row, every nullable field set and every secret sealed. */
-function fullRow(): DbInstance & { server: { id: string; name: string } } {
+function fullRow(): DbInstance & { server: { id: string; name: string; host: string } } {
   return {
     id: "inst-1",
     serverId: "srv-1",
@@ -26,6 +26,9 @@ function fullRow(): DbInstance & { server: { id: string; name: string } } {
     apiSubdomain: "clienta.wharf.example.com",
     studioSubdomain: "studio-clienta.wharf.example.com",
     sslMode: "require",
+    networkAccess: null,
+    networkAccessAppliedAt: null,
+    networkAccessError: null,
     pgPasswordEnc: Buffer.from("sealed-pg-password"),
     anonKeyEnc: Buffer.from("sealed-anon-key"),
     serviceRoleKeyEnc: Buffer.from("sealed-service-role-key"),
@@ -36,7 +39,7 @@ function fullRow(): DbInstance & { server: { id: string; name: string } } {
     deletedAt: null,
     createdAt: new Date("2026-07-24T17:55:00.000Z"),
     updatedAt: new Date("2026-07-24T18:00:00.000Z"),
-    server: { id: "srv-1", name: "db-01" },
+    server: { id: "srv-1", name: "db-01", host: "192.0.2.10" },
   };
 }
 
@@ -116,13 +119,13 @@ describe("serializeInstance", () => {
     expect(out.serverId).toBe("srv-1");
   });
 
-  it("embeds only id+name for an included server", () => {
+  it("embeds public server identity and host without credentials", () => {
     const out = serializeInstance({
       ...fullRow(),
       // Extra relation fields must not survive the allowlist.
-      server: { id: "srv-1", name: "db-01", host: "10.0.0.1" },
+      server: { id: "srv-1", name: "db-01", host: "10.0.0.1", sshPasswordEnc: Buffer.from("secret") },
     } as DbInstanceRecord);
-    expect(out.server).toEqual({ id: "srv-1", name: "db-01" });
+    expect(out.server).toEqual({ id: "srv-1", name: "db-01", host: "10.0.0.1" });
   });
 
   it("preserves the status verbatim (only the engine writes it)", () => {
@@ -172,9 +175,9 @@ describe("activeJob", () => {
 });
 
 describe("INSTANCE_INCLUDE", () => {
-  it("selects only the id and name of the related server", () => {
+  it("selects only the public identity and host of the related server", () => {
     expect(INSTANCE_INCLUDE).toEqual({
-      server: { select: { id: true, name: true } },
+      server: { select: { id: true, name: true, host: true } },
     });
   });
 

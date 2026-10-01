@@ -29,11 +29,12 @@ import type { InstanceDto } from "./api";
 import { AnalyticsSettingsForm } from "./analytics-settings-form";
 import { AuthSettingsForm } from "./auth-settings-form";
 import { EmailTemplatesForm } from "./email-templates-form";
+import { NetworkAccessForm } from "./network-access-form";
 
 /** How long to wait for the iframe's load event before offering the fallback. */
 const LOAD_TIMEOUT_MS = 12_000;
 
-type Tab = "studio" | "auth" | "email-templates" | "analytics-buckets";
+type Tab = "studio" | "auth" | "email-templates" | "analytics-buckets" | "network-access";
 
 const TAB_CLASSES =
   "rounded-[6px] px-2.5 py-1 text-[12.5px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cobalt-400";
@@ -54,7 +55,7 @@ export function ManageView({ instance, role }: { instance: InstanceDto; role: Ro
   return (
     <div className="-m-6 flex h-[calc(100vh-56px)] flex-col xl:-mx-8 xl:-my-7">
       {/* Slim strip keeps the panel identity above the embedded Studio. */}
-      <div className="flex h-[46px] shrink-0 items-center gap-3.5 border-b border-neutral-200 bg-white px-5">
+      <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-neutral-200 bg-white px-4 py-2">
         <Link
           href="/databases"
           className="inline-flex items-center gap-1.5 rounded-sm px-2 py-1 text-[13px] font-semibold text-cobalt-600 transition-colors hover:bg-cobalt-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cobalt-400"
@@ -64,7 +65,7 @@ export function ManageView({ instance, role }: { instance: InstanceDto; role: Ro
         </Link>
         <span className="font-semibold">{instance.name}</span>
         <StatusBadge status="running" />
-        <div className="flex items-center gap-1 rounded-[8px] bg-neutral-100 p-0.5">
+        <div className="flex max-w-full flex-wrap items-center gap-1 rounded-[8px] bg-neutral-100 p-0.5">
           <button
             type="button"
             onClick={() => setTab("studio")}
@@ -113,6 +114,11 @@ export function ManageView({ instance, role }: { instance: InstanceDto; role: Ro
           >
             Analytics buckets
           </button>
+          <button type="button" onClick={() => setTab("network-access")}
+            className={cn(TAB_CLASSES, tab === "network-access" ? "bg-white text-ink shadow-sm" : "text-neutral-500 hover:text-ink")}
+            aria-pressed={tab === "network-access"}>
+            Network access
+          </button>
         </div>
         {tab === "studio" ? (
           <span className="truncate font-mono text-xs text-neutral-400 max-md:hidden">
@@ -145,6 +151,10 @@ export function ManageView({ instance, role }: { instance: InstanceDto; role: Ro
       ) : tab === "analytics-buckets" ? (
         <div className="min-h-0 flex-1 overflow-y-auto bg-neutral-50">
           <AnalyticsSettingsForm instance={instance} role={role} />
+        </div>
+      ) : tab === "network-access" ? (
+        <div className="min-h-0 flex-1 overflow-y-auto bg-neutral-50">
+          <NetworkAccessForm instance={instance} role={role} />
         </div>
       ) : blocked ? (
         <div className="flex flex-1 items-center justify-center bg-neutral-50 p-6">

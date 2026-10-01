@@ -423,7 +423,11 @@ export function NewInstanceModal({
             >
               Provisioning generates secrets, renders the compose file with
               Traefik labels, uploads over SSH and health-checks the stack.
-              Certificates are issued on the first request.
+              Certificates are issued on the first request. Database
+              connections start allowed from all reachable addresses; open
+              Manage → Network access after provisioning if you want to add
+              restrictions. The Supabase HTTPS API and Studio are available
+              independently.
             </Alert>
           </ModalBody>
           <ModalFoot>

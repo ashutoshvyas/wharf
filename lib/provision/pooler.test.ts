@@ -11,7 +11,7 @@ vi.mock("@/lib/bootstrap/pooler-secrets", () => ({
   ensurePoolerSecrets: (...a: unknown[]) => ensurePoolerSecretsMock(...a),
 }));
 
-import { deregisterPoolerTenant, registerPoolerTenant } from "./pooler";
+import { assertPoolerNetworkPolicy, deregisterPoolerTenant, readPoolerNetworkState, registerPoolerTenant } from "./pooler";
 
 const CONN = { conn: true } as never;
 /** curl's own `-w '\n%{http_code}'` suffix — every 2xx fixture must include it. */
@@ -33,6 +33,37 @@ beforeEach(() => {
 });
 
 describe("registerPoolerTenant", () => {
+  it("sends only this tenant's allowlist and preserves its TLS policy", async () => {
+    await registerPoolerTenant(CONN, { serverId: "srv-1", project: "sb_4f2a", pgPassword: "test", sslMode: "require",
+      networkAccess: { mode: "restricted", allowedCidrs: ["198.51.100.10", "198.51.100.0/24"] } });
+    const cmd = execMock.mock.calls[0]![1] as string;
+    const body = JSON.parse(/-d '(\{.*\})'/.exec(cmd)![1]!);
+    expect(body.tenant.allow_list).toEqual(["198.51.100.10/32", "198.51.100.0/24"]);
+    expect(body.tenant.enforce_ssl).toBe(true);
+  });
+
+  it("blocks new clients and disconnects existing clients without creating an open tenant", async () => {
+    await registerPoolerTenant(CONN, { serverId: "srv-1", project: "sb_4f2a", pgPassword: "", sslMode: "require",
+      networkAccess: { mode: "blocked" } });
+    const commands = execMock.mock.calls.map((call) => String(call[1]));
+    expect(commands).toHaveLength(2);
+    expect(commands[0]).toContain("-X DELETE");
+    expect(commands[1]).toContain("-X GET");
+    expect(commands[1]).toContain("/sb_4f2a/terminate");
+    expect(commands.join(" ")).not.toContain("-X PUT");
+  });
+
+  it("sets both address families explicitly for Allow all", async () => {
+    await registerPoolerTenant(CONN, { serverId: "srv-1", project: "sb_4f2a", pgPassword: "test", sslMode: "require",
+      networkAccess: { mode: "all" } });
+    expect(execMock.mock.calls[0]![1]).toContain('"allow_list":["0.0.0.0/0","::/0"]');
+  });
+
+  it("does not accept an unconfirmed disconnect as successfully blocking access", async () => {
+    execMock.mockResolvedValueOnce(ok()).mockResolvedValueOnce(httpFail("unavailable", 500));
+    await expect(registerPoolerTenant(CONN, { serverId: "srv-1", project: "sb_4f2a", pgPassword: "", sslMode: "require",
+      networkAccess: { mode: "blocked" } })).rejects.toThrow("connection termination");
+  });
   it("PUTs the tenant with db_host set to the project's pooler alias, bearer-authenticated", async () => {
     await registerPoolerTenant(CONN, {
       serverId: "srv-1",
@@ -44,7 +75,7 @@ describe("registerPoolerTenant", () => {
     expect(execMock).toHaveBeenCalledTimes(1);
     const [conn, cmd] = execMock.mock.calls[0] as [unknown, string];
     expect(conn).toBe(CONN);
-    expect(cmd).toContain("curl -sS -w '\\n%{http_code}' -X PUT");
+    expect(cmd).toContain("curl -sS --connect-timeout 5 --max-time 30 -w '\\n%{http_code}' -X PUT");
     expect(cmd).toContain("http://127.0.0.1:4000/api/tenants/sb_4f2a");
 
     const bearer = /Authorization: Bearer ([\w.-]+)/.exec(cmd)?.[1];
@@ -122,12 +153,27 @@ describe("registerPoolerTenant", () => {
   });
 });
 
+describe("pooler network verification", () => {
+  it("reads only tenant ids and IP policies, without retrieving user credentials", async () => {
+    const rows = [{ external_id: "sb_4f2a", allow_list: ["198.51.100.10/32"] }];
+    execMock.mockResolvedValue({ code: 0, stdout: JSON.stringify(rows), stderr: "" });
+    await expect(readPoolerNetworkState(CONN)).resolves.toEqual(rows);
+    const command = execMock.mock.calls[0]![1] as string;
+    expect(command).not.toContain("password");
+    expect(command).not.toContain("SELECT *");
+    expect(() => assertPoolerNetworkPolicy(rows, "sb_4f2a", { mode: "restricted", allowedCidrs: ["198.51.100.10/32"] })).not.toThrow();
+    expect(() => assertPoolerNetworkPolicy(rows, "sb_4f2a", { mode: "all" })).toThrow();
+    expect(() => assertPoolerNetworkPolicy(rows, "sb_4f2a", { mode: "blocked" })).toThrow();
+    expect(() => assertPoolerNetworkPolicy([], "sb_4f2a", { mode: "blocked" })).not.toThrow();
+  });
+});
+
 describe("deregisterPoolerTenant", () => {
   it("DELETEs the tenant, bearer-authenticated", async () => {
     execMock.mockResolvedValue(ok("", 204));
     await deregisterPoolerTenant(CONN, "srv-1", "sb_4f2a");
     const [, cmd] = execMock.mock.calls[0] as [unknown, string];
-    expect(cmd).toContain("curl -sS -w '\\n%{http_code}' -X DELETE");
+    expect(cmd).toContain("curl -sS --connect-timeout 5 --max-time 30 -w '\\n%{http_code}' -X DELETE");
     expect(cmd).toContain("http://127.0.0.1:4000/api/tenants/sb_4f2a");
   });
 

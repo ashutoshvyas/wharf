@@ -41,12 +41,13 @@ import { audit } from "@/lib/audit";
 import { open } from "@/lib/crypto";
 import { serverLockHolder, tryAcquireServerLock } from "@/lib/jobs/lock";
 import { isInstanceSslMode, type InstanceSslMode } from "@/lib/instances/ssl-mode";
+import { DEFAULT_NETWORK_ACCESS, readNetworkAccess, type NetworkAccessPolicy } from "@/lib/instances/network-access";
 import { endJob, publish, startJob } from "@/lib/jobs/stream";
 import { exec, sftpWrite, withConnection } from "@/lib/ssh";
 import { waitForHealthy } from "./health";
 import { provisionJobId } from "./job-ids";
 import { composeProjectName, isValidSlug, remotePathFor, subdomainsFor } from "./naming";
-import { registerPoolerTenant } from "./pooler";
+import { assertPoolerNetworkPolicy, readPoolerNetworkState, registerPoolerTenant } from "./pooler";
 import { renderInstanceCompose } from "./render";
 import { generateInstanceSecrets, type InstanceSecrets } from "./secrets";
 import { loadStaticVolumeFiles } from "./static-volumes";
@@ -165,6 +166,7 @@ interface PipelineRow {
   apiSubdomain: string;
   studioSubdomain: string;
   sslMode: InstanceSslMode;
+  networkAccess: NetworkAccessPolicy | null;
   /**
    * Secrets already stored for this instance, when there are any — retry
    * REUSES them instead of minting new ones. See {@link resolveSecrets}.
@@ -367,6 +369,12 @@ async function runPipeline(
       // decoupled from it, below.
       try {
         await runPhase(phaseOpts, "pooler", async () => {
+          if (row.networkAccess) {
+            await prisma.dbInstance.update({ where: { id: row.id }, data: {
+              networkAccessAppliedAt: null,
+              networkAccessError: "Waiting for the pooler to confirm the saved policy.",
+            } });
+          }
           if (row.sslMode === "require") {
             // Older bootstrapped servers may still be running the pre-TLS
             // pooler template. Converge it before registering a tenant whose
@@ -380,11 +388,19 @@ async function runPipeline(
             project: row.composeProjectName,
             pgPassword: generated.pgPassword,
             sslMode: row.sslMode,
+            networkAccess: row.networkAccess,
           });
+          if (row.networkAccess) {
+            assertPoolerNetworkPolicy(await readPoolerNetworkState(conn), row.composeProjectName, row.networkAccess);
+            await prisma.dbInstance.update({ where: { id: row.id }, data: {
+              networkAccessAppliedAt: new Date(), networkAccessError: null,
+            } });
+          }
           emit(
             "info",
-            `registered with the shared pooler as postgres.${row.composeProjectName} ` +
-              `(sslmode=${row.sslMode})`,
+            row.networkAccess?.mode === "blocked"
+              ? "External database connections blocked — configure Network access in Manage."
+              : `registered with the shared pooler as postgres.${row.composeProjectName} (sslmode=${row.sslMode})`,
           );
         });
       } catch (err) {
@@ -539,6 +555,7 @@ export async function startProvision(input: {
         apiSubdomain,
         studioSubdomain,
         sslMode: input.sslMode,
+        networkAccess: DEFAULT_NETWORK_ACCESS,
         status: "provisioning",
       },
     });
@@ -552,6 +569,7 @@ export async function startProvision(input: {
       apiSubdomain,
       studioSubdomain,
       sslMode: input.sslMode,
+      networkAccess: DEFAULT_NETWORK_ACCESS,
     };
   } catch (err) {
     release();
@@ -581,7 +599,7 @@ export async function retryProvision(
   instanceId: string,
   ctx: ProvisionCtx,
 ): Promise<RetryProvisionResult> {
-  const instance = await prisma.dbInstance.findUnique({ where: { id: instanceId } });
+  let instance = await prisma.dbInstance.findUnique({ where: { id: instanceId } });
   if (!instance || instance.deletedAt) {
     return { invalid: `Instance ${instanceId} was not found.` };
   }
@@ -598,6 +616,12 @@ export async function retryProvision(
 
   const jobId = provisionJobId(instanceId);
   try {
+    const current = await prisma.dbInstance.findUnique({ where: { id: instanceId } });
+    if (!current || current.deletedAt || current.status !== "error") {
+      release();
+      return { invalid: "The instance is no longer available for provisioning retry." };
+    }
+    instance = current;
     await prisma.dbInstance.update({
       where: { id: instanceId },
       data: { status: "provisioning", lastActionLog: null },
@@ -630,6 +654,7 @@ export async function retryProvision(
       apiSubdomain: instance.apiSubdomain,
       studioSubdomain: instance.studioSubdomain,
       sslMode: instance.sslMode,
+      networkAccess: readNetworkAccess(instance.networkAccess),
       // Retry keeps this instance's identity — see resolveSecrets.
       existingSecrets: readStoredSecrets(instance),
     },

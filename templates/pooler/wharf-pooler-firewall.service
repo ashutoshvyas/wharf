@@ -1,0 +1,8 @@
+[Unit]
+Description=WHARF database network access
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/wharf/pooler/apply-network-firewall.sh

@@ -23,6 +23,7 @@ import { ensurePoolerSecrets } from "@/lib/bootstrap/pooler-secrets";
 import { exec } from "@/lib/ssh";
 import { poolerDbAlias } from "./naming";
 import type { InstanceSslMode } from "@/lib/instances/ssl-mode";
+import { ALL_NETWORKS, networkAccessSchema, type NetworkAccessPolicy } from "@/lib/instances/network-access";
 
 type SshConnection = Parameters<typeof exec>[0];
 
@@ -52,10 +53,11 @@ function shellQuote(value: string): string {
  * can split it back out and surface Supavisor's own message instead of a bare
  * "curl exit 22".
  */
-function curlCommand(method: "PUT" | "DELETE", url: string, bearer: string, body?: string): string {
+function curlCommand(method: "PUT" | "DELETE" | "GET", url: string, bearer: string, body?: string): string {
   const parts = [
     "curl",
     "-sS",
+    "--connect-timeout", "5", "--max-time", "30",
     "-w",
     // Literal two-char `\n` — curl's own -w format-string parser converts
     // it to a newline; an embedded raw newline byte here would rely on
@@ -108,6 +110,8 @@ export interface PoolerTenantInput {
   /** Require encrypted client connections for this tenant, or retain the
    * legacy plaintext-compatible behavior. */
   sslMode: InstanceSslMode;
+  /** Undefined/null preserves an existing legacy tenant's allow_list. */
+  networkAccess?: NetworkAccessPolicy | null;
 }
 
 /**
@@ -118,6 +122,16 @@ export async function registerPoolerTenant(
   conn: SshConnection,
   input: PoolerTenantInput,
 ): Promise<void> {
+  const policy = input.networkAccess == null ? null : networkAccessSchema.parse(input.networkAccess);
+  if (policy?.mode === "blocked") {
+    // No tenant means no new database connections. Termination also closes
+    // existing pools; DELETE alone only invalidates Supavisor's lookup cache.
+    await deregisterPoolerTenant(conn, input.serverId, input.project);
+    const bearer = await adminBearer(input.serverId);
+    const res = await exec(conn, curlCommand("GET", `${ADMIN_BASE}/api/tenants/${encodeURIComponent(input.project)}/terminate`, bearer));
+    assertOk("connection termination", res);
+    return;
+  }
   const bearer = await adminBearer(input.serverId);
   const body = JSON.stringify({
     tenant: {
@@ -146,6 +160,7 @@ export async function registerPoolerTenant(
       // an unencrypted connection before password authentication when this is
       // true. The listener-level certificate is shared by every tenant.
       enforce_ssl: input.sslMode === "require",
+      ...(policy ? { allow_list: policy.mode === "all" ? ALL_NETWORKS : policy.allowedCidrs } : {}),
       users: [
         {
           db_user: "postgres",
@@ -162,6 +177,40 @@ export async function registerPoolerTenant(
     curlCommand("PUT", `${ADMIN_BASE}/api/tenants/${input.project}`, bearer, body),
   );
   assertOk("tenant registration", res);
+}
+
+export interface PoolerNetworkState {
+  external_id: string;
+  allow_list: string[];
+}
+
+/** Read ONLY network policy columns; never return/log tenant passwords or pooler secrets. */
+export async function readPoolerNetworkState(conn: SshConnection): Promise<PoolerNetworkState[]> {
+  const sql = "SELECT COALESCE(json_agg(json_build_object('external_id', external_id, 'allow_list', allow_list)), '[]'::json) FROM _supavisor.tenants";
+  const res = await exec(conn,
+    `docker compose -p wharf-pooler -f /opt/wharf/pooler/docker-compose.yml exec -T pooler-db psql -X -U supavisor_admin -d supavisor -Atq -v ON_ERROR_STOP=1 -c ${shellQuote(sql)}`,
+  );
+  if (res.code !== 0) throw new Error("Could not verify database network policies on the server.");
+  const parsed: unknown = JSON.parse(res.stdout.trim());
+  if (!Array.isArray(parsed) || !parsed.every((row) => row && typeof row.external_id === "string" &&
+    Array.isArray(row.allow_list) && row.allow_list.every((range: unknown) => typeof range === "string"))) {
+    throw new Error("The pooler returned an invalid network policy response.");
+  }
+  return parsed as PoolerNetworkState[];
+}
+
+export function assertPoolerNetworkPolicy(
+  rows: PoolerNetworkState[], project: string, policy: NetworkAccessPolicy,
+): void {
+  const row = rows.find((entry) => entry.external_id === project);
+  if (policy.mode === "blocked") {
+    if (row) throw new Error("The database is still registered for external connections. Retry applying its policy.");
+    return;
+  }
+  const expected = policy.mode === "all" ? ALL_NETWORKS : policy.allowedCidrs;
+  if (!row || JSON.stringify([...row.allow_list].sort()) !== JSON.stringify([...expected].sort())) {
+    throw new Error("The running pooler policy does not match the saved settings. Retry applying its policy.");
+  }
 }
 
 /**

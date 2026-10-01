@@ -19,7 +19,7 @@ export interface WebsiteDto {
   notes: string;
   createdAt: string;
   updatedAt: string;
-  server?: { id: string; name: string };
+  server?: { id: string; name: string; host: string };
   dbInstance?: { id: string; name: string; slug: string; status: string } | null;
 }
 

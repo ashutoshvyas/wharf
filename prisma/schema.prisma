@@ -61,6 +61,7 @@ model Server {
   // every re-run so already-registered tenants never get orphaned by a
   // rotated VAULT_ENC_KEY. Null until the pooler has been bootstrapped.
   poolerSecretsEnc   Bytes?     @map("pooler_secrets_enc")
+  poolerFirewallManaged Boolean @default(false) @map("pooler_firewall_managed")
   tags               String[]
   createdAt          DateTime   @default(now()) @map("created_at")
   updatedAt          DateTime   @updatedAt @map("updated_at")
@@ -100,6 +101,11 @@ model DbInstance {
   apiSubdomain       String         @map("api_subdomain")
   studioSubdomain    String         @map("studio_subdomain")
   sslMode            InstanceSslMode @default(require) @map("ssl_mode")
+  // Null is tolerated for legacy/directly-created rows and reads as Allow all;
+  // the migration and provisioning pipeline store the explicit policy.
+  networkAccess      Json?          @map("network_access")
+  networkAccessAppliedAt DateTime?  @map("network_access_applied_at")
+  networkAccessError String?        @map("network_access_error")
   pgPasswordEnc      Bytes?         @map("pg_password_enc")
   anonKeyEnc         Bytes?         @map("anon_key_enc")
   serviceRoleKeyEnc  Bytes?         @map("service_role_key_enc")

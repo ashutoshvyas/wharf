@@ -39,7 +39,7 @@ describe("serializeWebsite", () => {
   it("never leaks the encrypted password or the username", () => {
     const out = serializeWebsite(
       record({
-        server: { id: "srv-1", name: "vps-01" },
+        server: { id: "srv-1", name: "vps-01", host: "192.0.2.10" },
         dbInstance: { id: "db-1", name: "clienta-prod", slug: "clienta", status: "running" },
       }),
     );
@@ -73,7 +73,7 @@ describe("serializeWebsite", () => {
     const out = serializeWebsite(
       record({
         dbInstanceId: "db-1",
-        server: { id: "srv-1", name: "vps-01" },
+        server: { id: "srv-1", name: "vps-01", host: "192.0.2.10" },
         dbInstance: {
           id: "db-1",
           name: "clienta-prod",
@@ -82,7 +82,7 @@ describe("serializeWebsite", () => {
         },
       }),
     );
-    expect(out.server).toEqual({ id: "srv-1", name: "vps-01" });
+    expect(out.server).toEqual({ id: "srv-1", name: "vps-01", host: "192.0.2.10" });
     expect(out.dbInstance).toEqual({
       id: "db-1",
       name: "clienta-prod",
@@ -109,10 +109,11 @@ describe("serializeWebsite", () => {
         server: {
           id: "srv-1",
           name: "vps-01",
+          host: "192.0.2.10",
           sshPasswordEnc: Buffer.from("secret"),
         } as unknown as WebsiteRecord["server"],
       }),
     );
-    expect(Object.keys(out.server!).sort()).toEqual(["id", "name"]);
+    expect(Object.keys(out.server!).sort()).toEqual(["host", "id", "name"]);
   });
 });

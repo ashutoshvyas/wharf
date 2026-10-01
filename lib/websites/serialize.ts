@@ -14,13 +14,14 @@
  * /api/websites handler so list/detail/mutation responses are shaped alike.
  */
 export const WEBSITE_INCLUDE = {
-  server: { select: { id: true, name: true } },
+  server: { select: { id: true, name: true, host: true } },
   dbInstance: { select: { id: true, name: true, slug: true, status: true } },
 } as const;
 
 interface ServerRef {
   id: string;
   name: string;
+  host: string;
 }
 
 interface DbInstanceRef {
@@ -79,7 +80,7 @@ export function serializeWebsite(website: WebsiteRecord): SerializedWebsite {
     updatedAt: website.updatedAt.toISOString(),
   };
   if (website.server != null) {
-    out.server = { id: website.server.id, name: website.server.name };
+    out.server = { id: website.server.id, name: website.server.name, host: website.server.host };
   }
   // dbInstance is embedded as `null` (vs. absent) when the relation was
   // included but the website has no linked instance — lets the client

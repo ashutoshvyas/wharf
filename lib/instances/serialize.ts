@@ -36,12 +36,13 @@ import type { InstanceSslMode } from "./ssl-mode";
  * export handlers and route config.
  */
 export const INSTANCE_INCLUDE = {
-  server: { select: { id: true, name: true } },
+  server: { select: { id: true, name: true, host: true } },
 } as const;
 
 interface ServerRef {
   id: string;
   name: string;
+  host: string;
 }
 
 /**
@@ -129,7 +130,7 @@ export function serializeInstance(
   // `server` is embedded only when the relation was actually included —
   // omitted (not null) otherwise, per contract §1 ("when included").
   if (instance.server != null) {
-    out.server = { id: instance.server.id, name: instance.server.name };
+    out.server = { id: instance.server.id, name: instance.server.name, host: instance.server.host };
   }
   return out;
 }

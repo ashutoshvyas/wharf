@@ -3,7 +3,7 @@
 /**
  * Databases — fleet dashboard (/069/070/071, design §5.6/§5.7/§5.9).
  *
- * Card grid of every instance in the fleet. Polling is server-confirmed only:
+ * Card/list views of every instance in the fleet. Polling is server-confirmed only:
  * 5s while ANY instance is transitional, 30s otherwise (design §6). Nothing in
  * this view flips a status locally — the engine owns `status`, the UI renders
  * it (contract §2).
@@ -12,6 +12,10 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Database, Plus } from "lucide-react";
 import { can, type Role } from "@/lib/rbac";
+import { groupCollection, sortCollection } from "@/lib/collection";
+import { CollectionToolbar } from "@/components/ui/collection-toolbar";
+import { useCollectionPreferences } from "@/components/ui/use-collection-preferences";
+import { DataTable } from "@/components/ui/data-table";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -40,6 +44,20 @@ import { SslModeModal } from "./ssl-mode-modal";
 
 const POLL_TRANSITIONAL_MS = 5_000;
 const POLL_IDLE_MS = 30_000;
+const SORT_OPTIONS = [
+  { value: "created", label: "Created date" }, { value: "name", label: "Name" },
+  { value: "host", label: "Server IP / host" }, { value: "server", label: "Server name" },
+  { value: "status", label: "Status" },
+];
+const GROUP_OPTIONS = [
+  { value: "none", label: "No grouping" }, { value: "host", label: "Server IP / host" },
+  { value: "status", label: "Status" },
+];
+const LIST_COLUMNS = [
+  { key: "name", header: "Database", sortKey: "name" }, { key: "server", header: "Server / IP", sortKey: "host" },
+  { key: "endpoints", header: "API / Studio" }, { key: "status", header: "Status", sortKey: "status" },
+  { key: "ssl", header: "TLS" }, { key: "created", header: "Created", sortKey: "created" }, { key: "actions", header: "Actions" },
+];
 
 export function DatabasesView({
   role,
@@ -73,7 +91,7 @@ export function DatabasesView({
    * or "provisioning" yet, so inferring the kind from that stale snapshot
    * always guessed "provision" (see jobKindFor's doc comment).
    */
-  const [progress, setProgress] = useState<{ instance: InstanceDto; kind: JobKind } | null>(
+  const [progress, setProgress] = useState<{ instance: InstanceDto; kind: JobKind; } | null>(
     null,
   );
   /** Instance the new-instance modal is currently streaming. */
@@ -90,7 +108,20 @@ export function DatabasesView({
     },
   });
 
-  const rows = instances.data ?? [];
+  const preferences = useCollectionPreferences("databases",
+    { view: "cards", sort: "created", direction: "desc", group: "none" }, SORT_OPTIONS, GROUP_OPTIONS);
+  const hostLabel = (instance: InstanceDto) => instance.server?.host || `Unknown host · ${instance.server?.name ?? instance.serverId}`;
+  const groupBy = preferences.group === "host" ? hostLabel
+    : preferences.group === "status" ? (instance: InstanceDto) => instance.status : undefined;
+  const rows = sortCollection(instances.data ?? [], (instance) => {
+    switch (preferences.sort) {
+      case "name": return instance.name;
+      case "host": return hostLabel(instance);
+      case "server": return instance.server?.name ?? "";
+      case "status": return instance.status;
+      default: return instance.createdAt;
+    }
+  }, preferences.direction);
 
   const retry = useMutation({
     mutationFn: (instance: InstanceDto) => retryInstance(instance.id),
@@ -108,7 +139,7 @@ export function DatabasesView({
   });
 
   const remove = useMutation({
-    mutationFn: (vars: { instance: InstanceDto; force: boolean }) =>
+    mutationFn: (vars: { instance: InstanceDto; force: boolean; }) =>
       removeInstance(vars.instance.id, vars.instance.name, vars.force),
     onSuccess: (_data, vars) => {
       void queryClient.invalidateQueries({ queryKey: INSTANCES_QUERY_KEY });
@@ -128,6 +159,34 @@ export function DatabasesView({
       modalProvisioningId === instance.id ||
       restoreFor?.id === instance.id ||
       modalCloningId === instance.id
+    );
+  }
+
+  function renderInstance(instance: InstanceDto) {
+    return (
+      <InstanceCard
+        key={instance.id}
+        instance={instance}
+        role={role}
+        layout={preferences.view}
+        silentProgress={isSilent(instance)}
+        onSecrets={() => setSecretsFor(instance)}
+        onViewLog={() => setLogFor(instance)}
+        onRetry={() => {
+          if (canRetry) retry.mutate(instance);
+        }}
+        onRemove={() => {
+          if (canRemove) setRemoveFor(instance);
+        }}
+        onRestore={() => {
+          if (canRestore) setRestoreFor(instance);
+        }}
+        onClone={() => {
+          if (canRestore) setCloneFor(instance);
+        }}
+        onSslMode={() => setSslModeFor(instance)}
+        onExpandProgress={() => setProgress({ instance, kind: jobKindFor(instance) })}
+      />
     );
   }
 
@@ -183,32 +242,24 @@ export function DatabasesView({
           />
         </Card>
       ) : (
-        <div className="grid gap-4 [grid-template-columns:repeat(auto-fill,minmax(330px,1fr))]">
-          {rows.map((instance) => (
-            <InstanceCard
-              key={instance.id}
-              instance={instance}
-              role={role}
-              silentProgress={isSilent(instance)}
-              onSecrets={() => setSecretsFor(instance)}
-              onViewLog={() => setLogFor(instance)}
-              onRetry={() => {
-                if (canRetry) retry.mutate(instance);
-              }}
-              onRemove={() => {
-                if (canRemove) setRemoveFor(instance);
-              }}
-              onRestore={() => {
-                if (canRestore) setRestoreFor(instance);
-              }}
-              onClone={() => {
-                if (canRestore) setCloneFor(instance);
-              }}
-              onSslMode={() => setSslModeFor(instance)}
-              onExpandProgress={() => setProgress({ instance, kind: jobKindFor(instance) })}
-            />
-          ))}
-        </div>
+        <>
+          <CollectionToolbar count={rows.length} {...preferences} />
+          {preferences.view === "list" ? (
+            <Card><DataTable columns={LIST_COLUMNS} rows={rows} rowKey={(instance) => instance.id}
+              groupBy={groupBy} renderRow={renderInstance} sort={preferences.tableSort} /></Card>
+          ) : (
+            <div className="space-y-6">
+              {groupCollection(rows, groupBy).map(([label, members]) => (
+                <section key={label || "all"}>
+                  {groupBy && <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold text-neutral-700">{label}<span className="font-normal text-neutral-500">({members.length})</span></h3>}
+                  <div className="grid gap-4 [grid-template-columns:repeat(auto-fill,minmax(min(100%,330px),1fr))]">
+                    {members.map(renderInstance)}
+                  </div>
+                </section>
+              ))}
+            </div>
+          )}
+        </>
       )}
 
       <NewInstanceModal
@@ -323,7 +374,7 @@ export function DatabasesView({
             <p className="mt-2">
               The metadata record is soft-deleted and recoverable for a grace period
               — <b className="text-danger">the database volumes are destroyed
-              immediately and permanently.</b>{" "}
+                immediately and permanently.</b>{" "}
               That data cannot be recovered. Linked websites keep their record with
               the database link cleared.
             </p>
@@ -377,7 +428,7 @@ function ProgressDialog({
   onClose,
   onTerminal,
 }: {
-  progress: { instance: InstanceDto; kind: JobKind } | null;
+  progress: { instance: InstanceDto; kind: JobKind; } | null;
   onClose: () => void;
   onTerminal: (instance: InstanceDto, kind: JobKind, status: "ok" | "error") => void;
 }) {

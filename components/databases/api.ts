@@ -10,6 +10,7 @@
  * defensively so a backend that wraps the payload does not blank the screen.
  */
 import type { InstanceSslMode } from "@/lib/instances/ssl-mode";
+import type { NetworkAccessDto, NetworkAccessPolicy, NetworkAccessResult } from "@/lib/instances/network-access";
 
 /** Contract §2 state machine. */
 export type InstanceStatus =
@@ -30,6 +31,7 @@ const TRANSITIONAL: readonly InstanceStatus[] = [
 export interface InstanceServerRef {
   id: string;
   name: string;
+  host: string;
 }
 
 /** Contract §1. */
@@ -419,6 +421,21 @@ export async function updateInstanceSslMode(
     `/api/db-instances/${id}/ssl-mode`,
     jsonInit("PATCH", { sslMode }),
   );
+}
+
+export function fetchNetworkAccess(id: string): Promise<NetworkAccessDto> {
+  return apiFetch(`/api/db-instances/${id}/network-access`, { cache: "no-store" });
+}
+
+export function updateNetworkAccess(id: string, policy: NetworkAccessPolicy): Promise<NetworkAccessResult> {
+  return apiFetch(`/api/db-instances/${id}/network-access`, jsonInit("PATCH", policy));
+}
+
+export function enableServerNetworkAccess(
+  serverId: string, confirmName: string, baselineAllowedCidrs: string[],
+): Promise<NetworkAccessResult> {
+  return apiFetch(`/api/servers/${serverId}/database-network-access`,
+    jsonInit("POST", { confirmName, baselineAllowedCidrs }));
 }
 
 /** Only valid from `error` (contract §2) → 202 {jobId}. */

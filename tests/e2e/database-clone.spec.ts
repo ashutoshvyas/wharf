@@ -12,7 +12,7 @@ function instance(index: number, name: string, status: InstanceDto["status"] = "
   return {
     id: `10000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
     name, slug: `clone-${index}`, serverId,
-    server: { id: serverId, name: index === 1 ? "Production host" : "Staging host" },
+    server: { id: serverId, name: index === 1 ? "Production host" : "Staging host", host: index === 1 ? "192.0.2.10" : "192.0.2.20" },
     composeProjectName: `sb_clone_${index}`, remotePath: `/unused/clone-${index}`,
     apiSubdomain: `clone-${index}.example.test`, studioSubdomain: `clone-${index}-studio.example.test`,
     sslMode: "require", status, activeJob: null, lastActionLog: null, healthCheckedAt: null,

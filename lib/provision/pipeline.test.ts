@@ -57,6 +57,8 @@ vi.mock("./render", () => ({
 const registerPoolerMock = vi.fn();
 vi.mock("./pooler", () => ({
   registerPoolerTenant: (...a: unknown[]) => registerPoolerMock(...a),
+  readPoolerNetworkState: vi.fn(async () => []),
+  assertPoolerNetworkPolicy: vi.fn(),
 }));
 
 const generateSecretsMock = vi.fn(() =>
@@ -182,6 +184,13 @@ describe("startProvision — validation (no row created)", () => {
 });
 
 describe("startProvision — happy path", () => {
+  it("starts new databases open even on a server whose shared firewall is already open", async () => {
+    serverFindUnique.mockResolvedValue({ id: "srv-1", bootstrapped: true, poolerFirewallManaged: true });
+    await startProvision(BASE);
+    await watchJob(provisionJobId("inst-1"));
+    expect(instanceCreate).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ networkAccess: { mode: "all" } }) }));
+    expect(registerPoolerMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ networkAccess: { mode: "all" } }));
+  });
   it("runs every phase in contract order and persists sealed secrets", async () => {
     const res = await startProvision(BASE);
     expect(res).toHaveProperty("instanceId");

@@ -67,6 +67,12 @@ beforeEach(() => {
 });
 
 describe("updateInstanceSslMode", () => {
+  it("preserves the latest access policy when changing SSL settings", async () => {
+    findFirstMock.mockResolvedValueOnce({ ...ROW, networkAccess: { mode: "all" } })
+      .mockResolvedValueOnce({ ...ROW, networkAccess: { mode: "blocked" } });
+    await updateInstanceSslMode("inst-1", "require");
+    expect(registerPoolerTenantMock).toHaveBeenCalledWith(CONN, expect.objectContaining({ networkAccess: { mode: "blocked" } }));
+  });
   it("enables TLS on the shared pooler before updating the tenant and database row", async () => {
     const result = await updateInstanceSslMode("inst-1", "require");
 
@@ -75,6 +81,7 @@ describe("updateInstanceSslMode", () => {
     expect(registerPoolerTenantMock).toHaveBeenCalledWith(CONN, {
       serverId: "srv-1",
       project: "sb_4f2a",
+      networkAccess: { mode: "all" },
       pgPassword: "decrypted-pg-password",
       sslMode: "require",
     });

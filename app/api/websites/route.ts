@@ -2,7 +2,7 @@
  * /api/websites — list + create.
  *
  * GET  websites.read   — full list (optional ?serverId= filter), domain asc,
- *                        with embedded server {id,name} and
+ *                        with embedded server {id,name,host} and
  *                        dbInstance {id,name,slug,status} refs.
  * POST websites.write  — validate, verify FKs, seal the credential password
  *                        (AES-256-GCM, lib/crypto), audit 'website.create'.

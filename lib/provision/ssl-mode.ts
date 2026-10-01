@@ -9,6 +9,7 @@ import { prisma } from "@/lib/db";
 import type { DbInstanceRecord } from "@/lib/instances/serialize";
 import { INSTANCE_INCLUDE } from "@/lib/instances/serialize";
 import type { InstanceSslMode } from "@/lib/instances/ssl-mode";
+import { readNetworkAccess } from "@/lib/instances/network-access";
 import { serverLockHolder, tryAcquireServerLock } from "@/lib/jobs/lock";
 import { withConnection } from "@/lib/ssh";
 import { registerPoolerTenant } from "./pooler";
@@ -54,8 +55,11 @@ export async function updateInstanceSslMode(
     return { busy: serverLockHolder(instance.serverId) ?? "another job" };
   }
 
-  const pgPassword = open(instance.pgPasswordEnc);
   try {
+    const current = await prisma.dbInstance.findFirst({ where: { id: instanceId, deletedAt: null } });
+    if (!current) return { notFound: true };
+    if (!current.pgPasswordEnc) return { invalid: "Finish provisioning this instance first." };
+    const pgPassword = open(current.pgPasswordEnc);
     return await withConnection(instance.serverId, async (conn: SshConnection) => {
       if (sslMode === "require") {
         await refreshPooler(conn, quietEmit, instance.serverId);
@@ -66,6 +70,7 @@ export async function updateInstanceSslMode(
         project: instance.composeProjectName,
         pgPassword,
         sslMode,
+        networkAccess: readNetworkAccess(current.networkAccess),
       });
 
       try {
@@ -81,7 +86,8 @@ export async function updateInstanceSslMode(
             serverId: instance.serverId,
             project: instance.composeProjectName,
             pgPassword,
-            sslMode: instance.sslMode,
+            sslMode: current.sslMode,
+            networkAccess: readNetworkAccess(current.networkAccess),
           });
         } catch (rollbackError) {
           const persistMessage =
