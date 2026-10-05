@@ -1,0 +1,15 @@
+WHARF — Hosting Control Plane
+Copyright 2026 INITQUBE
+
+WHARF is developed by INITQUBE.
+
+This attribution notice must be retained in redistributed copies and
+derivative works as required by Section 4 of the Apache License, Version 2.0.
+This notice does not add to or modify the license terms.
+
+The vendored Supabase deployment files are Copyright 2024 Supabase and
+licensed under Apache-2.0. WHARF modifies these files for its deployment
+templates. See templates/supabase/LICENSE and VERSIONS.md.
+
+Third-party material retains its own copyright and license notices.
+See THIRD_PARTY_NOTICES.md.
