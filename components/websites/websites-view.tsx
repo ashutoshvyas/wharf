@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Websites screen (, design §5.5 + prototype viewWebsites()).
+ * Websites screen (design §5.5 + prototype viewWebsites()).
  *
  * Card/list views of every tracked domain with expansion for the credential
  * block, an Add/Edit modal, and a danger ConfirmModal for delete. Write

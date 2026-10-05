@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Restore / Sync modal (+ ) — replace this instance's data,
+ * Restore / Sync modal — replace this instance's data,
  * from either of two sources:
  *
  *  - **Upload backup file** — a .zip/.backup/.dump/.sql the operator

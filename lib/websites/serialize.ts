@@ -6,7 +6,7 @@
  * the output — the only signal is the derived boolean `hasCredential`.
  * `accessUsername` is likewise withheld from list/detail responses; both
  * halves of the credential come only from the audited reveal endpoint
- * (GET /api/websites/:id/credential, ).
+ * (GET /api/websites/:id/credential).
  */
 
 /**

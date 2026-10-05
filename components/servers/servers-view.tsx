@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Servers screen (, design §5.2 + prototype viewServers()).
+ * Servers screen (design §5.2 + prototype viewServers()).
  *
  * Card/list views of registered hosts: name + bootstrap StatusBadge (unreachable
  * wins), mono user@host:port · auth line, tag pills, hosted counts, and the

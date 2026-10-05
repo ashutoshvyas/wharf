@@ -6,9 +6,8 @@
  * config, TOFU host-key flow, exec semantics, sftpWrite ordering, and
  * cleanup guarantees.
  *
- * The trailing describe.skip block is the real-sshd integration suite
- *: CI provides SSH_TEST_HOST/SSH_TEST_USER/SSH_TEST_KEY and
- * un-skips it there; locally it stays skipped.
+ * The trailing integration suite requires SSH_TEST_HOST, SSH_TEST_USER and
+ * SSH_TEST_KEY to connect to a test SSH server. It stays skipped by default.
  */
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
@@ -689,7 +688,7 @@ describe("checkReachable", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Integration — requires a live sshd; CI un-skips via env.
+// Integration — requires a live sshd; enabled through test environment variables.
 // ---------------------------------------------------------------------------
 
 describe.skip("integration (requires SSH_TEST_HOST)", () => {

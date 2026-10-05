@@ -1,5 +1,5 @@
 /**
- * Provisioning pipeline (+ ) — architecture §4.3, spec §6.1,
+ * Provisioning pipeline — architecture §4.3, spec §6.1,
  * docs/provisioning-contract.md §2/§4/§5.
  *
  * One async job per instance, held under the per-server single-flight lock
@@ -13,7 +13,7 @@
  *
  * Phases, in order: validate → [prepare] → secrets → render → upload → start →
  * health → pooler. `prepare` appears ONLY when the target server was not already
- * bootstrapped (, lazy preparation) and is emitted by
+ * bootstrapped (lazy preparation) and is emitted by
  * lib/bootstrap/prepare.ts, with bootstrap's own step lines nested as `info`.
  *
  * All remote work happens inside ONE withConnection — one connection, one

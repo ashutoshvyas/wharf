@@ -1,11 +1,9 @@
 @import "tailwindcss";
 
 /*
-  WHARF — INITQUBE Brand & Design System v1.0
+  WHARF design system. Copyright 2026 INITQUBE; Apache-2.0; see NOTICE.
   Cobalt leads. Coral sparks. Neutrals carry everything else.
   Base 4px spacing rhythm · Figtree + JetBrains Mono
-  Tokens carried verbatim from app/globals.css,
-  extended with WHARF panel tokens (terminal bg, danger hover shade).
 */
 
 @theme {

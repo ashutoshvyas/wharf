@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Last-action log tail (, design §6 "errors keep their evidence").
+ * Last-action log tail (design §6 "errors keep their evidence").
  *
  * The source is the DTO's `lastActionLog` — a failed run's evidence stays
  * pinned to the entity and remains viewable after a later success, because the

@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Audit log screen (, design §5.10 + prototype viewAudit()).
+ * Audit log screen (design §5.10 + prototype viewAudit()).
  *
  * DataTable: mono timestamp · user · action Badge (danger tint for anything
  * matching /remove|delete/) · target (linked into its module when the type is

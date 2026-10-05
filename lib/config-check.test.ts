@@ -35,7 +35,7 @@ describe("checkConfig", () => {
 
   it("flags a COOKIE_DOMAIN that does not cover INSTANCE_DOMAIN", () => {
     expect(
-      settings({ ...PROD, COOKIE_DOMAIN: ".example.com" }),
+      settings({ ...PROD, COOKIE_DOMAIN: ".other.example.com" }),
     ).toContain("COOKIE_DOMAIN");
   });
 

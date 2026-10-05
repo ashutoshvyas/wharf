@@ -159,7 +159,7 @@ export function deriveAncillarySecrets(jwtSecret: string): AncillarySecrets {
     s3AccessKeyId: derive("s3_access_key_id", 32),
     s3AccessKeySecret: derive("s3_access_key_secret", 64),
     dashboardPassword: derive("dashboard_password", 32),
-    // Shared secret GoTrue signs its send-SMS hook calls with.
+    // Shared secret used to sign GoTrue's send-SMS hook calls.
     // Derived, not stored: the panel route that receives those calls
     // re-derives it from the same jwtSecret to verify the signature, so
     // there is no third copy to keep in sync or rotate separately.
@@ -186,7 +186,7 @@ export interface AncillarySecrets {
 }
 
 /**
- * Analytics buckets' (Iceberg, ) supporting secrets — MinIO's root
+ * Analytics buckets' (Iceberg) supporting secrets — MinIO's root
  * password, the static bearer token storage-api sends to Lakekeeper's
  * Iceberg REST catalog, and Lakekeeper's own at-rest encryption key for its
  * Postgres metadata store. Derived the same way as {@link deriveAncillarySecrets}

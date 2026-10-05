@@ -1,5 +1,5 @@
 /**
- * lazy server preparation + preflight.
+ * Lazy server preparation + preflight.
  * Mirrors lib/bootstrap/bootstrap.test.ts's style: the whole SSH surface is
  * faked, so these assert command sequencing and emitted lines, never a host.
  */
@@ -133,7 +133,7 @@ describe("preflight parsers", () => {
   });
 });
 
-describe("preflightServer (/ contract §6)", () => {
+describe("preflightServer (contract §6)", () => {
   it("passes on a clean host and touches nothing", async () => {
     const { lines, emit } = collector();
     await expect(preflightServer(CONN, emit)).resolves.toBeUndefined();

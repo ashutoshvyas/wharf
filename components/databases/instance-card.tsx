@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Instance card (, design §5.6 + prototype viewDatabases()).
+ * Instance card (design §5.6 + prototype viewDatabases()).
  *
  * name + StatusBadge / mono `project · server` / the two subdomains as copy
  * MonoFields / created date / status-dependent action row. Role-forbidden

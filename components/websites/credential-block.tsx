@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Row-expansion content for the Websites table (, design §5.5):
+ * Row-expansion content for the Websites table (design §5.5):
  * credential MonoFields (username plain, password masked with audited
  * async reveal) + notes.
  *

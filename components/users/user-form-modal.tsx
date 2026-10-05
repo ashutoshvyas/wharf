@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Add-user / edit-role modal (, design §5.11 + prototype userModal()).
+ * Add-user / edit-role modal (design §5.11 + prototype userModal()).
  *
  * One component for both jobs, mirroring the prototype: creating asks for an
  * email + role, editing locks the email (it is the login identity and the

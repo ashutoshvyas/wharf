@@ -1,5 +1,5 @@
 /**
- * Route-level tests for the Servers API (..022): RBAC gates, secret
+ * Route-level tests for the Servers API: RBAC gates, secret
  * sealing on create, 409 delete guard, panel-credential reveal, keypair
  * generation. lib/auth, lib/db and lib/crypto are mocked (same style as
  * lib/api-helpers.test.ts).

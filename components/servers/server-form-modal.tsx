@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Register / Edit server modal (, design §5.3 + prototype serverModal()).
+ * Register / Edit server modal (design §5.3 + prototype serverModal()).
  *
  * - Auth method is a two-button segmented control (prototype .seg style).
  * - Create mode: paste a PEM private key OR use a password; a panel-managed

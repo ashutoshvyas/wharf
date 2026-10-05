@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Browser SSH terminal (, design §4.2 Terminal + prototype
+ * Browser SSH terminal (design §4.2 Terminal + prototype
  * serverTerminal()): xterm.js + FitAddon inside the dark LogStream-style
  * frame — neutral-800 chrome bar (three dots, mono title, connection
  * StatusBadge, session duration, onDark Disconnect), terminal-bg body.

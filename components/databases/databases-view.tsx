@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Databases — fleet dashboard (/069/070/071, design §5.6/§5.7/§5.9).
+ * Databases — fleet dashboard (design §5.6/§5.7/§5.9).
  *
  * Card/list views of every instance in the fleet. Polling is server-confirmed only:
  * 5s while ANY instance is transitional, 30s otherwise (design §6). Nothing in

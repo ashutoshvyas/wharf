@@ -74,7 +74,7 @@ const INSTANCES: DemoInstance[] = [
     server: "vps-01",
     status: "running",
     created: "12 Jun 2026",
-    pgPass: "pg_9xKm2LqR8vNw",
+    pgPass: "synthetic-demo-password-1",
   },
   {
     id: "db2",
@@ -83,7 +83,7 @@ const INSTANCES: DemoInstance[] = [
     server: "vps-01",
     status: "stopped",
     created: "9 Jun 2026",
-    pgPass: "pg_5tYw8HnB3kLp",
+    pgPass: "synthetic-demo-password-2",
   },
   {
     id: "db3",
@@ -92,7 +92,7 @@ const INSTANCES: DemoInstance[] = [
     server: "vps-02",
     status: "error",
     created: "22 Jul 2026",
-    pgPass: "pg_2wQz6JmX9cVb",
+    pgPass: "synthetic-demo-password-3",
   },
 ];
 
@@ -172,7 +172,7 @@ export default function KitPage() {
             UI kit review
           </h1>
           <p className="mt-0.5 text-[13px] text-neutral-500">
-            Every component, every variant and state. Dev-only page.
+            Every component, every variant and state. All records and credentials shown here are synthetic.
           </p>
         </header>
 
@@ -245,8 +245,8 @@ export default function KitPage() {
           <Card className="grid gap-4 p-6 md:grid-cols-2">
             <MonoField label="Host" value="root@192.0.2.10:22" />
             <MonoField
-              label="Postgres password (local secret)"
-              value="pg_9xKm2LqR8vNw"
+              label="Postgres password (synthetic demo)"
+              value="synthetic-demo-password-1"
               secret
             />
             <MonoField
@@ -313,7 +313,7 @@ export default function KitPage() {
               rowKey={(r) => r.id}
               renderExpanded={(r) => (
                 <div className="grid gap-3 md:grid-cols-2">
-                  <MonoField label="Postgres password" value={r.pgPass} secret />
+                  <MonoField label="Postgres password (synthetic demo)" value={r.pgPass} secret />
                   <MonoField
                     label="Subdomain"
                     value={`${r.slug}.wharf.example.com`}

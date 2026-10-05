@@ -1,10 +1,10 @@
 "use client";
 
 /**
- * New instance modal (, design §5.7 AS REVISED + contract §3/§7).
+ * New instance modal (design §5.7 AS REVISED + contract §3/§7).
  *
- * Bootstrap policy: preparation is part of provisioning (architecture §4.1,
- * ), so EVERY reachable server is selectable — none are disabled. A
+ * Bootstrap policy: preparation is part of provisioning (architecture §4.1),
+ * so every reachable server is selectable. A
  * server that is not yet a database host carries an inline note plus the
  * wildcard-DNS record it will need, because selecting it is the moment that
  * record starts to matter.

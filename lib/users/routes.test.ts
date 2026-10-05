@@ -129,7 +129,7 @@ describe("POST /api/users", () => {
     );
 
     const res = await createUserRoute(
-      jsonReq("POST", { email: " Ada@example.com ", role: "operator" }),
+      jsonReq("POST", { email: " Ada@EXAMPLE.com ", role: "operator" }),
     );
     expect(res.status).toBe(201);
 
@@ -141,7 +141,7 @@ describe("POST /api/users", () => {
 
     const body = await res.json();
     expect(body.inviteUrl).toMatch(
-      /^https:\/\/panel\.wharf\.dev\/invite\/[A-Za-z0-9_-]{43}$/,
+      /^https:\/\/panel\.wharf\.example\.com\/invite\/[A-Za-z0-9_-]{43}$/,
     );
     expect(body).not.toHaveProperty("passwordHash");
     // The URL carries the RAW token; the DB only ever saw its digest.

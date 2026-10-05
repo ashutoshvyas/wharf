@@ -1,5 +1,5 @@
 /**
- * GET /api/servers/:id/bootstrap-log (/052) — SSE stream of the
+ * GET /api/servers/:id/bootstrap-log — SSE stream of the
  * server's bootstrap job (`bootstrap:{id}`), with buffered replay for late
  * subscribers. Any authenticated role ('servers.read'). Wire format is
  * documented in lib/jobs/stream.ts; an unknown/expired job id yields a

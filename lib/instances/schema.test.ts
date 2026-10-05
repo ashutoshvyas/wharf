@@ -1,5 +1,5 @@
 /**
- * request-schema bounds. The slug becomes a DNS label
+ * Request-schema bounds. The slug becomes a DNS label
  * (`{slug}.{INSTANCE_DOMAIN}`) and is globally unique, so its regex and
  * length cap are load-bearing, not cosmetic (contract §7).
  */

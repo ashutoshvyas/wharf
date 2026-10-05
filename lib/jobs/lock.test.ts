@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { serverLockHolder, tryAcquireServerLock } from "./lock";
 
-describe("per-server single-flight lock (/063)", () => {
+describe("per-server single-flight lock", () => {
   it("second acquisition fails until released; release is idempotent", () => {
     const id = `srv-${Math.random()}`;
     const release = tryAcquireServerLock(id, "bootstrap");

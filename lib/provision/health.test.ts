@@ -1,5 +1,5 @@
 /**
- * server-side health checks. The backoff sleeps are stubbed through
+ * Server-side health checks. The backoff sleeps are stubbed through
  * the `__testing` seam so the 300s budget is exercised in milliseconds.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";

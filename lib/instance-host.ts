@@ -2,7 +2,7 @@
  * True when `hostname` is a WHARF-managed instance subdomain: under
  * INSTANCE_DOMAIN and not the panel's own host.
  *
- * Shared by the forwardAuth gate (app/api/auth/verify/route.ts, ) and
+ * Shared by the forwardAuth gate (app/api/auth/verify/route.ts) and
  * the login flow's returnTo handling (app/(auth)/actions.ts,
  * auth.config.ts): both need to trust a cross-origin redirect target
  * pointing at Studio (studio-{slug}.INSTANCE_DOMAIN is a different origin

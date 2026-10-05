@@ -17,7 +17,7 @@
  * COOKIE DOMAIN: the browser only sends `wharf.session` to studio-*.domain
  * when COOKIE_DOMAIN is the shared apex (e.g. ".wharf.example.com"). Without that
  * this endpoint correctly sees no cookie and denies everything — which is
- * why validates the setting at boot.
+ * why configuration validation checks the setting at boot.
  *
  * SECURITY: fail closed. Any parse/verify/role problem is a 401; the token
  * value is never logged, and no decoded claim other than the email is echoed

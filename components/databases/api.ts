@@ -1,6 +1,6 @@
 /**
  * Databases module — client-side fetch helpers + wire DTOs
- * (…, docs/provisioning-contract.md §1 + §3).
+ * (docs/provisioning-contract.md §1 + §3).
  *
  * The DTO is the contract's allowlist: no `*Enc` column and no decrypted value
  * ever appears on a read — key material comes only from

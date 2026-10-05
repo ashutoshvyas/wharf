@@ -1,5 +1,5 @@
 /**
- * the instance DTO is the contract a UI agent codes against
+ * The instance DTO defines the API contract
  * (docs/provisioning-contract.md §1). These tests pin the allowlist: exact
  * key set, ISO date strings, and — the security-critical one — that no
  * ciphertext column or secret value can leak through the serializer even when

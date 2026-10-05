@@ -1,5 +1,5 @@
 /**
- * Login screen (, design §5.1) — centered card on neutral-50 with the
+ * Login screen (design §5.1) — centered card on neutral-50 with the
  * .bg-grid-ink brand backdrop. Wordmark, email + password, primary button,
  * generic danger alert on failure. Nothing else.
  */

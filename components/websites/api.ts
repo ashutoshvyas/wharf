@@ -1,5 +1,5 @@
 /**
- * Websites module — client-side fetch helpers + wire DTOs (/043).
+ * Websites module — client-side fetch helpers + wire DTOs.
  *
  * Defensive about response shapes from endpoints built in parallel
  * workstreams:

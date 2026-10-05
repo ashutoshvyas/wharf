@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Database-hosting card (, design §5.4 + prototype viewServerDetail()).
+ * Database-hosting card (design §5.4 + prototype viewServerDetail()).
  *
  * Policy (owner decision 2026-07-24): servers are NEVER prepared up-front.
  * Most servers only host websites; preparation (Docker + Traefik + firewall)

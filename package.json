@@ -19,7 +19,8 @@
     "db:studio": "prisma studio",
     "check:secrets": "tsx scripts/check-secret-logging.ts",
     "test:e2e": "playwright test",
-    "test:e2e:ui": "playwright test --ui"
+    "test:e2e:ui": "playwright test --ui",
+    "check:credentials": "gitleaks git --redact --log-opts=--all"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",
@@ -57,5 +58,6 @@
     "tsx": "^4.23.1",
     "typescript": "^5.9.3",
     "vitest": "^4.1.10"
-  }
+  },
+  "license": "Apache-2.0"
 }

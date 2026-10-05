@@ -7,6 +7,7 @@
  */
 import bcrypt from "bcryptjs";
 import { prisma } from "../lib/db";
+import { adminSeedConfig } from "../scripts/admin-seed-config";
 
 // Fixed ids so demo seeding stays idempotent across runs.
 const DEMO_SERVER_1_ID = "00000000-0000-4000-8000-000000000001";
@@ -15,16 +16,7 @@ const DEMO_WEBSITE_1_ID = "00000000-0000-4000-8000-000000000101";
 const DEMO_WEBSITE_2_ID = "00000000-0000-4000-8000-000000000102";
 
 async function main() {
-  const adminEmail = process.env.ADMIN_EMAIL;
-  const adminPassword = process.env.ADMIN_PASSWORD;
-
-  if (!adminEmail || !adminPassword) {
-    console.error(
-      "Seed failed: ADMIN_EMAIL and ADMIN_PASSWORD must be set in the environment.\n" +
-        "Example: ADMIN_EMAIL=you@example.com ADMIN_PASSWORD=change-me npm run db:seed"
-    );
-    process.exit(1);
-  }
+  const { adminEmail, adminPassword } = adminSeedConfig(process.env);
 
   const passwordHash = await bcrypt.hash(adminPassword, 12);
 
@@ -33,7 +25,7 @@ async function main() {
     update: { passwordHash, role: "admin" },
     create: { email: adminEmail, passwordHash, role: "admin" },
   });
-  console.log(`Admin user ready: ${admin.email} (role: ${admin.role})`);
+  console.log(`Admin user ready (role: ${admin.role}).`);
 
   if (process.env.SEED_DEMO === "1") {
     await seedDemoData();

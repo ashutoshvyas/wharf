@@ -1,7 +1,7 @@
 /**
  * Shared Postgres load/dump primitives for the two engines that overwrite an
- * instance's data in place: restore.ts (from an uploaded file, ) and
- * sync.ts (from a live source database, ).
+ * instance's data in place: restore.ts (from an uploaded file) and
+ * sync.ts (from a live source database).
  *
  * Everything here runs INSIDE the instance's own `db` container via
  * `docker compose exec` — that container ships the version-matched

@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Provisioning / teardown progress (, contract §5, design §5.7 + §4.2).
+ * Provisioning / teardown progress (contract §5, design §5.7 + §4.2).
  *
  * The checklist is derived PURELY from the phase events on the SSE stream —
  * never from timers. Every phase boundary arrives as a line whose text begins
@@ -15,8 +15,8 @@
  * into, e.g. `› installDocker`) names an id that is not in the phase table and
  * is therefore ignored by the checklist while still showing in the log.
  *
- * `prepare` is emitted only for a server that is not yet a database host
- *, so it renders only once it has appeared in the stream.
+ * `prepare` is emitted only for a server that is not yet a database host,
+ * so it renders only once it has appeared in the stream.
  */
 import { useEffect, useRef } from "react";
 import { Check, Maximize2, X } from "lucide-react";
@@ -75,7 +75,7 @@ export const REMOVE_PHASES: readonly PhaseDef[] = [
   { id: "metadata", label: "Release metadata" },
 ];
 
-/** Restore phases (`upload → snapshot → restore → cleanup`, ). */
+/** Restore phases (`upload → snapshot → restore → cleanup`). */
 export const RESTORE_PHASES: readonly PhaseDef[] = [
   { id: "upload", label: "Upload backup" },
   { id: "snapshot", label: "Snapshot current data" },
@@ -85,7 +85,7 @@ export const RESTORE_PHASES: readonly PhaseDef[] = [
 
 /**
  * Live-source sync phases (`connect → dump → snapshot → restore → storage →
- * cleanup`, ). `storage` always appears — it reports itself as skipped
+ * cleanup`). `storage` always appears — it reports itself as skipped
  * when the source isn't copying objects — so it is not marked optional.
  */
 export const SYNC_PHASES: readonly PhaseDef[] = [

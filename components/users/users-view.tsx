@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Users screen (, design §5.11 + prototype viewUsers()).
+ * Users screen (design §5.11 + prototype viewUsers()).
  *
  * DataTable: avatar initial + email (with a "you" Badge on your own row) ·
  * role Badge (cobalt for admin, neutral otherwise) · created date · row

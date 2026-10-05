@@ -1,5 +1,5 @@
 /**
- * /invite/<token> — set-password screen (, styled after
+ * /invite/<token> — set-password screen (styled after
  * app/(auth)/login: grid-ink backdrop, qube mark, wordmark).
  *
  * PUBLIC (allowlisted in middleware.ts) — the visitor has no session yet by

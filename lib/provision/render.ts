@@ -224,7 +224,7 @@ export interface AuthSettingsValues {
   appleEmailOptional: boolean;
 }
 
-/** Exactly what .env.template hardcoded before unchanged behavior when unset. */
+/** Default Auth settings matching the bundled .env.template when no override is set. */
 export const DEFAULT_AUTH_SETTINGS: AuthSettingsValues = {
   disableSignup: false,
   enableEmailSignup: true,
@@ -573,7 +573,7 @@ async function renderEnv(
     S3_PROTOCOL_ACCESS_KEY_SECRET: ancillary.s3AccessKeySecret,
   };
 
-  // self-hosted-configurable Auth settings. Falls back to exactly
+  // Self-hosted-configurable Auth settings. Falls back to exactly
   // what this template hardcoded before this feature existed, so a fresh
   // provision with nothing configured yet renders byte-identical output.
   const auth = input.authSettings ?? DEFAULT_AUTH_SETTINGS;
@@ -645,7 +645,7 @@ async function renderEnv(
     APPLE_EMAIL_OPTIONAL: bool(auth.appleEmailOptional),
   });
 
-  // per-flow email subject/template overrides. A flow with no entry
+  // Per-flow email subject/template overrides. A flow with no entry
   // (or no instanceId/panelUrl to build the URL from) renders both vars
   // empty — GoTrue treats empty exactly like unset, falling back to its own
   // built-in default (confirmed; see the module doc for this feature).

@@ -1,5 +1,5 @@
 /**
- * Servers module — client-side fetch helpers + wire DTOs (/026/027).
+ * Servers module — client-side fetch helpers + wire DTOs.
  *
  * Mirrors docs/api.md: GET /api/servers returns a BARE array of serialized
  * servers (an envelope is tolerated defensively); secrets are never echoed

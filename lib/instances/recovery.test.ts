@@ -1,5 +1,5 @@
 /**
- * crash recovery + orphan detection.
+ * Crash recovery + orphan detection.
  *
  * The sweep is the dangerous half: it rewrites instance status behind the
  * user's back, so these tests pin exactly which rows it may touch (stale AND

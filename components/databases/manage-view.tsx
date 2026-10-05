@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Manage view (, design §5.8) — native Supabase Studio embedded in the
+ * Manage view (design §5.8) — native Supabase Studio embedded in the
  * panel shell.
  *
  * The panel does NOT rebuild Studio (spec §6.3). Traefik's `wharf-auth@file`

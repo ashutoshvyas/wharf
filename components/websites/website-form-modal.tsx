@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Add / Edit website modal (, design §5.5 + prototype websiteModal()).
+ * Add / Edit website modal (design §5.5 + prototype websiteModal()).
  *
  * - Server options come from GET /api/servers (parallel workstream — both
  *   {servers:[...]} and bare-array shapes are handled in ./api).

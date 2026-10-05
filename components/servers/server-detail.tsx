@@ -1,13 +1,13 @@
 "use client";
 
 /**
- * Server detail screen (, design §5.4 + prototype viewServerDetail()).
+ * Server detail screen (design §5.4 + prototype viewServerDetail()).
  *
  * Header (back link, name, StatusBadge, mono host) + Overview / Hosted /
  * Terminal tabs synced to ?tab=. Overview: Connection card (host, ssh
  * summary, host-key TOFU state, reachability check, keypair generation with
  * show-once public key), Linked panel card (audited credential reveals), and
- * the bootstrap card. Terminal renders for operator+ on
+ * the bootstrap card. The terminal is available to operators and admins on
  * reachable servers.
  */
 import { useRef, useState } from "react";

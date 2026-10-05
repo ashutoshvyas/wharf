@@ -1,9 +1,8 @@
 /**
- * In-memory job event streaming — the shared plumbing for every
- * long-running SSH job: bootstrap now (/053), provisioning and teardown
- * later (/065, ).
+ * In-memory job event streaming — the shared plumbing for long-running
+ * SSH jobs, including bootstrap, provisioning and teardown.
  *
- * Design (architecture §4.3 + delivery-board ):
+ * Design (architecture §4.3):
  *  - pub/sub keyed by jobId, with a ring buffer (last {@link BUFFER_CAP}
  *    events) replayed to late subscribers;
  *  - jobs are explicitly ended with a status; ended jobs are kept for

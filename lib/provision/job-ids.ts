@@ -20,7 +20,7 @@ export function restoreJobId(instanceId: string): string {
   return `restore:${instanceId}`;
 }
 
-/** a restore whose source is a live database rather than a file. */
+/** A restore whose source is a live database rather than a file. */
 export function syncJobId(instanceId: string): string {
   return `sync:${instanceId}`;
 }

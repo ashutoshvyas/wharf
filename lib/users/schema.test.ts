@@ -9,7 +9,7 @@ import {
 
 describe("userEmailSchema", () => {
   it("trims and lowercases before validating", () => {
-    expect(userEmailSchema.parse("  Ada@example.com ")).toBe(
+    expect(userEmailSchema.parse("  Ada@EXAMPLE.com ")).toBe(
       "ada@example.com",
     );
   });
