@@ -45,6 +45,10 @@ environment files, private keys, backups, real account identities, or internal
 deployment logs. Scanner exceptions must match an exact synthetic fixture and
 its specific path; do not disable scanning for an entire test directory.
 
+If repository history has been rewritten, use a fresh clone before contributing.
+Do not merge or push branches from an older clone: that can restore removed
+data. Reapply only the changes you need onto the current clean history.
+
 ## License and attribution
 
 Contributions are submitted under the repository's Apache-2.0 license unless
