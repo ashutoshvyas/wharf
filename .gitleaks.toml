@@ -1,0 +1,33 @@
+title = "WHARF credential scanning"
+
+[extend]
+useDefault = true
+
+# These are deliberately invalid fixtures, never deployment credentials.
+# Each exception requires BOTH its exact fixture value and its test path.
+[[allowlists]]
+description = "Synthetic PEM used to validate the server input schema"
+targetRules = ["private-key"]
+condition = "AND"
+paths = ['''(^|/)lib/servers/schema\.test\.ts$''']
+regexTarget = "match"
+regexes = ['''MC4CAQAwBQYDK2VwBCIEIFakeFakeFakeFakeFakeFakeFakeFakeFakeFake''']
+
+[[allowlists]]
+description = "Fixed fake password used by pure rendering regression tests"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''(^|/)lib/provision/render\.test\.ts$''']
+regexTarget = "secret"
+regexes = ['''^aB3dE6gH9jK2mN5pQ8sT1vW4xY7zA0bC$''']
+
+[[allowlists]]
+description = "Invalid JWT signatures used by pure rendering regression tests"
+targetRules = ["jwt"]
+condition = "AND"
+paths = ['''(^|/)lib/provision/render\.test\.ts$''']
+regexTarget = "secret"
+regexes = [
+  '''^eyJhbGciOiJIUzI1NiJ9\.eyJyb2xlIjoiYW5vbiJ9\.fake-anon-signature$''',
+  '''^eyJhbGciOiJIUzI1NiJ9\.eyJyb2xlIjoic2VydmljZV9yb2xlIn0\.fake-sr-signature$''',
+]
