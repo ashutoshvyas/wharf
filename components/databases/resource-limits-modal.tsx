@@ -106,9 +106,10 @@ export function ResourceLimitsModal({
     if (!update.isPending) onClose();
   };
 
+  const title = `Resource limits — ${instance.name}`;
   return (
-    <Dialog open={open} onClose={close}>
-      <ModalHead title={`Resource limits — ${instance.name}`} onClose={close} />
+    <Dialog open={open} onClose={close} ariaLabel={title}>
+      <ModalHead title={title} onClose={close} />
       <ModalBody>
         <p className="mb-4 text-[13px] leading-5 text-neutral-500">
           A budget for the whole instance — every container shares it, so one busy
