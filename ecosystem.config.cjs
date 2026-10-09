@@ -29,6 +29,7 @@ const shared = {
   INSTANCE_DOMAIN: process.env.INSTANCE_DOMAIN,
   GATEWAY_WS_URL: process.env.GATEWAY_WS_URL,
   LETSENCRYPT_EMAIL: process.env.LETSENCRYPT_EMAIL,
+  HEALTH_CHECK_INTERVAL_MS: process.env.HEALTH_CHECK_INTERVAL_MS,
 };
 
 const PANEL_PORT = process.env.PANEL_PORT || "3000";

@@ -25,6 +25,7 @@ import {
   Trash2,
   Upload,
 } from "lucide-react";
+import { HEALTH_LOG_PREFIX } from "@/lib/instances/health-observe";
 import { formatResourceLimits } from "@/lib/instances/resource-limits";
 import { can, type Role } from "@/lib/rbac";
 import { Alert } from "@/components/ui/alert";
@@ -92,6 +93,10 @@ export function InstanceCard({
 
   const busy = isTransitional(instance.status);
   const isError = instance.status === "error";
+  /** The periodic health check's reason, when it (not a job) set the status. */
+  const healthNote = instance.lastActionLog?.startsWith(HEALTH_LOG_PREFIX)
+    ? instance.lastActionLog.slice(instance.lastActionLog.indexOf(": ") + 2)
+    : null;
 
   const power = useMutation({
     mutationFn: (action: "stop" | "start") =>
@@ -358,9 +363,19 @@ export function InstanceCard({
         · created {formatDate(instance.createdAt)}
       </div>
 
+      {healthNote && instance.status === "stopped" ? (
+        <Alert variant="warning" className="mb-3 px-3 py-2.5">
+          <b className="font-semibold">Stopped outside WHARF.</b> {healthNote}
+        </Alert>
+      ) : null}
+
       {isError ? (
         <Alert variant="danger" className="mb-3 px-3 py-2.5">
-          <b className="font-semibold">Provisioning failed.</b>{" "}
+          {healthNote ? (
+            <><b className="font-semibold">Health check failed:</b> {healthNote}.</>
+          ) : (
+            <b className="font-semibold">Provisioning failed.</b>
+          )}{" "}
           <button
             type="button"
             onClick={onViewLog}

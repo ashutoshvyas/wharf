@@ -767,6 +767,27 @@ the same SQL builders/restore flags as the clone engine.
 
 ---
 
+### 11. An instance's status changed on its own
+
+The panel checks every server once a minute (`HEALTH_CHECK_INTERVAL_MS`,
+default 60000, `0` disables) with one read-only `docker ps -a` over SSH,
+and corrects instances whose stored status no longer matches the containers:
+
+| What the server shows | Status becomes |
+|---|---|
+| every service running | `running` |
+| every container stopped | `stopped` — Start brings it back |
+| some services exited, crash-looping, unhealthy or missing | `error` — Retry runs the idempotent `up -d` |
+| server unreachable (running instances only) | `error` |
+
+A change needs two consecutive checks to agree (about 2 minutes), so a
+container mid-restart never flips it. The reason is the instance's last log
+line (`Health check at …: kong exited (code 137)`) and an
+`instance.health.status-change` audit row. The check never touches
+instances mid-job, servers whose lock is held, or an `error` left by a failed
+provision/restore/clone — and it switches its own `error` back to `running`
+once the stack is healthy again.
+
 ## Quick reference
 
 ### Environment variables — and what breaks without each

@@ -12,6 +12,7 @@ import { deriveAnalyticsSecrets, deriveAncillarySecrets, type InstanceSecrets } 
 import {
   DEFAULT_AUTH_SETTINGS,
   HEALTHCHECK_POLICY,
+  instanceServices,
   KONG_WORKER_PROCESSES,
   SERVICE_LIMITS,
   kongLabels,
@@ -447,6 +448,14 @@ describe("renderInstanceCompose — runtime policy", () => {
     const { doc } = await renderDoc();
     const env = doc.services.kong?.environment as Record<string, unknown>;
     expect(env.KONG_NGINX_WORKER_PROCESSES).toBe(KONG_WORKER_PROCESSES);
+  });
+});
+
+describe("instanceServices", () => {
+  it("lists the always-on and profile-gated long-running services, never one-shots", async () => {
+    const { core, optional } = await instanceServices();
+    expect(core.sort()).toEqual(["auth", "db", "imgproxy", "kong", "meta", "realtime", "rest", "storage", "studio"]);
+    expect(optional.sort()).toEqual(["lakekeeper", "minio"]);
   });
 });
 

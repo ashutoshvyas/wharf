@@ -33,6 +33,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { dump, load } from "js-yaml";
+import type { InstanceServices } from "@/lib/instances/health-observe";
 import { instanceSliceName } from "@/lib/instances/resource-limits";
 import {
   POOLER_NETWORK,
@@ -506,6 +507,24 @@ function applyRuntimePolicy(doc: ComposeFile, templatePath: string, project: str
   if (kongEnv && typeof kongEnv === "object" && !Array.isArray(kongEnv)) {
     (kongEnv as Record<string, unknown>).KONG_NGINX_WORKER_PROCESSES = KONG_WORKER_PROCESSES;
   }
+}
+
+/**
+ * The long-running services an instance runs, read from the vendored
+ * template: `core` every instance has, `optional` the profile-gated ones
+ * (analytics). One-shot init services (`restart: "no"`) are in neither — they
+ * exit by design. Used by the periodic health check.
+ */
+export async function instanceServices(): Promise<InstanceServices> {
+  const templatePath = path.join(process.cwd(), TEMPLATE_DIR, "docker-compose.yml");
+  const doc = load(await readFile(templatePath, "utf8")) as ComposeFile;
+  const core: string[] = [];
+  const optional: string[] = [];
+  for (const [name, service] of Object.entries(doc.services)) {
+    if (service.restart === "no") continue;
+    (service.profiles ? optional : core).push(name);
+  }
+  return { core, optional };
 }
 
 /** Render the instance's docker-compose.yml from the vendored template. */
