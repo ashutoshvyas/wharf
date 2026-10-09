@@ -288,6 +288,8 @@ export function DatabasesView({
       />
 
       <ResourceLimitsModal
+        // Remount per opening so the form seeds from this instance's limits.
+        key={limitsFor?.id ?? "closed"}
         open={limitsFor !== null}
         onClose={() => setLimitsFor(null)}
         instance={limitsFor}

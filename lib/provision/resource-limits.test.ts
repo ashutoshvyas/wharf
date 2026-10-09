@@ -28,6 +28,7 @@ vi.mock("./render", async (importOriginal) => ({
   renderInstanceCompose: (...args: unknown[]) => renderMock(...args),
 }));
 
+import { createHash } from "node:crypto";
 import { serverLockHolder, tryAcquireServerLock } from "@/lib/jobs/lock";
 import { applyResourceLimits, sliceUnitFile } from "./resource-limits";
 
@@ -52,11 +53,23 @@ const ROW = {
 
 const ok = (stdout = "") => ({ code: 0, stdout, stderr: "" });
 
-/** Fake server: systemd/cgroup v2, with `parents` as each container's CgroupParent. */
-function server(parents: { before: string[]; after?: string[] }) {
+const sha = (text: string) => createHash("sha256").update(text).digest("hex");
+
+/**
+ * Fake server: systemd/cgroup v2, with `parents` as each container's
+ * CgroupParent and `deployed` as the config files on disk (by default exactly
+ * what renderMock renders, i.e. no drift).
+ */
+function server(
+  parents: { before: string[]; after?: string[] },
+  deployed: { compose: string; env: string } = { compose: "compose", env: "env" },
+) {
   let inspected = 0;
   execMock.mockImplementation(async (_conn: unknown, cmd: string) => {
     if (cmd.startsWith("docker info")) return ok("systemd 2\n");
+    if (cmd.includes("sha256sum")) {
+      return ok(`${sha(deployed.compose)}  docker-compose.yml\n${sha(deployed.env)}  .env\n`);
+    }
     if (cmd.includes("docker inspect")) {
       inspected += 1;
       const list = inspected === 1 ? parents.before : (parents.after ?? parents.before);
@@ -114,10 +127,43 @@ describe("applyResourceLimits", () => {
       `systemctl daemon-reload && systemctl set-property --runtime ${SLICE} 'CPUQuota=150%' 'MemoryHigh=1843M' 'MemoryMax=2048M'`,
     );
     expect(commands().some((c) => c.includes("up -d"))).toBe(false);
-    expect(renderMock).not.toHaveBeenCalled();
+    // Config is compared by checksum and, being current, left untouched.
+    expect(sftpWriteMock.mock.calls.map((c) => c[1])).toEqual([`/etc/systemd/system/${SLICE}`]);
     expect(updateMock).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({ ...LIMITS, resourceLimitsError: null, resourceLimitsAppliedAt: expect.any(Date) }),
     }));
+  });
+
+  it("re-applying brings an attached instance's drifted config up to date, recreating only what changed", async () => {
+    // e.g. limits applied before meta's inherited health check was retimed.
+    server({ before: [SLICE, SLICE] }, { compose: "compose-before-meta-fix", env: "env" });
+
+    const result = await applyResourceLimits("inst-1", LIMITS);
+
+    expect(result).toMatchObject({ ok: true, recreated: true });
+    const uploaded = sftpWriteMock.mock.calls.map((c) => c[1]);
+    expect(uploaded).toContain("/opt/db-instances/sb_4f2a/docker-compose.yml");
+    expect(uploaded).toContain("/opt/db-instances/sb_4f2a/.env");
+    // A bare `up -d`: Compose recreates only services whose config hash changed.
+    expect(commands()).toContain("cd /opt/db-instances/sb_4f2a && docker compose -p sb_4f2a up -d");
+  });
+
+  it("compares config by checksum, never reading the .env's secrets", async () => {
+    server({ before: [SLICE] });
+    await applyResourceLimits("inst-1", LIMITS);
+    expect(commands()).toContain("cd /opt/db-instances/sb_4f2a && sha256sum docker-compose.yml .env");
+    expect(commands().some((c) => /\bcat\b/.test(c))).toBe(false);
+  });
+
+  it("updates a stopped instance's drifted files without starting it", async () => {
+    findFirstMock.mockResolvedValue({ ...ROW, status: "stopped" });
+    server({ before: [SLICE] }, { compose: "old", env: "env" });
+
+    const result = await applyResourceLimits("inst-1", LIMITS);
+
+    expect(result).toMatchObject({ ok: true, recreated: false });
+    expect(sftpWriteMock.mock.calls.map((c) => c[1])).toContain("/opt/db-instances/sb_4f2a/docker-compose.yml");
+    expect(commands().some((c) => c.includes("up -d"))).toBe(false);
   });
 
   it("recreates a pre-slice instance once, re-rendered from all of its stored settings", async () => {

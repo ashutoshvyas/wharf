@@ -16,10 +16,17 @@
  * outside the slice, and Docker fixes a container's cgroup at creation, so
  * they are recreated once with `up -d` (about a minute of downtime).
  *
+ * Every apply also re-renders the instance's config and compares it with the
+ * server's copy. If WHARF now renders it differently (a template or policy
+ * change since it was last applied), the files are replaced and `up -d`
+ * recreates only the services whose config changed. Re-applying unchanged
+ * limits is therefore how an existing instance picks up such changes.
+ *
  * Requires Docker's systemd cgroup driver on cgroup v2 — the default for
  * get.docker.com on any current systemd distribution. Anything else is
  * reported as unsupported rather than silently left unlimited.
  */
+import { createHash } from "node:crypto";
 import type { DbInstance } from "@prisma/client";
 import { open } from "@/lib/crypto";
 import { prisma } from "@/lib/db";
@@ -129,6 +136,31 @@ export async function containersOutsideSlice(conn: SshConnection, project: strin
     .filter((line) => line.startsWith("parent=") && line !== inSlice).length;
 }
 
+const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
+
+/**
+ * Whether the server's docker-compose.yml/.env differ from what WHARF renders
+ * now. Compares checksums, so the .env's secrets never cross the wire; a
+ * missing or unreadable file counts as drifted.
+ */
+export async function configDrifted(
+  conn: SshConnection,
+  remotePath: string,
+  composeYaml: string,
+  envFile: string,
+): Promise<boolean> {
+  const res = await exec(conn, `cd ${remotePath} && sha256sum docker-compose.yml .env`);
+  if (res.code !== 0) return true;
+  const remote = new Map(
+    res.stdout
+      .trim()
+      .split("\n")
+      .map((line) => line.trim().split(/\s+/))
+      .map(([hash, file]) => [file, hash] as const),
+  );
+  return remote.get("docker-compose.yml") !== sha256(composeYaml) || remote.get(".env") !== sha256(envFile);
+}
+
 /** Re-render from everything stored — see lib/provision/stored-settings.ts. */
 function renderFromStoredSettings(instance: DbInstance & Parameters<typeof storedRenderSettings>[0]) {
   return renderInstanceCompose({
@@ -198,11 +230,21 @@ export async function applyResourceLimits(
           );
         }
         await installInstanceSlice(conn, project, limits);
-        if (outside === 0) return;
 
+        // Re-applying also converges the instance's config: anything WHARF
+        // now renders differently (e.g. a new health-check policy) reaches
+        // instances whose limits were applied before that change.
         const { composeYaml, envFile } = await renderFromStoredSettings(instance);
+        const drifted = await configDrifted(conn, instance.remotePath, composeYaml, envFile);
+        if (outside === 0 && !drifted) return;
+
         await sftpWrite(conn, `${instance.remotePath}/docker-compose.yml`, composeYaml);
         await sftpWrite(conn, `${instance.remotePath}/.env`, envFile, 0o600);
+        // A stopped instance gets the files but is not started: its
+        // containers pick them up on the next full `up -d`. (Stopped with
+        // containers outside the slice was refused above.)
+        if (instance.status === "stopped") return;
+        // Recreates only the services whose config changed.
         const up = await exec(
           conn,
           `cd ${instance.remotePath} && docker compose -p ${project} up -d`,

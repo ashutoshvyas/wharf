@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Gauge } from "lucide-react";
 import {
@@ -56,16 +56,17 @@ export function ResourceLimitsModal({
 }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const [cpu, setCpu] = useState("");
-  const [memGb, setMemGb] = useState("");
+  // Seeded on the first render, never by an effect: an effect left the
+  // fields empty ("Unlimited") for a frame, and an edit made in that frame
+  // was overwritten. The parent remounts this per instance (`key`), which
+  // also resets these between openings.
+  const [cpu, setCpu] = useState(() =>
+    instance?.cpuLimit == null ? "" : String(instance.cpuLimit),
+  );
+  const [memGb, setMemGb] = useState(() =>
+    instance?.memoryLimitMb == null ? "" : String(instance.memoryLimitMb / 1024),
+  );
   const [error, setError] = useState<Error | null>(null);
-
-  useEffect(() => {
-    if (!open || !instance) return;
-    setCpu(instance.cpuLimit === null ? "" : String(instance.cpuLimit));
-    setMemGb(instance.memoryLimitMb === null ? "" : String(instance.memoryLimitMb / 1024));
-    setError(null);
-  }, [open, instance]);
 
   const update = useMutation({
     mutationFn: (limits: ResourceLimits) => updateResourceLimits(instance!.id, limits),
@@ -75,7 +76,7 @@ export function ResourceLimitsModal({
       toast({
         title: "Resource limits applied",
         message: updated.recreated
-          ? `${updated.name} was restarted inside its own budget: ${formatResourceLimits(updated)}.`
+          ? `${updated.name} runs within ${formatResourceLimits(updated)}; services whose configuration changed were restarted.`
           : `${updated.name} now runs within ${formatResourceLimits(updated)}.`,
         variant: "success",
       });
@@ -168,6 +169,14 @@ export function ResourceLimitsModal({
           </Alert>
         ) : null}
 
+        {!changed ? (
+          <p className="mt-3 text-xs leading-5 text-neutral-500">
+            Re-applying also brings this instance&apos;s configuration up to date with the
+            current WHARF release. Any service whose configuration changed restarts briefly;
+            the rest keep running.
+          </p>
+        ) : null}
+
         {neverApplied && instance.status === "running" ? (
           <Alert
             variant="info"
@@ -205,10 +214,10 @@ export function ResourceLimitsModal({
         </Button>
         <Button
           variant="primary"
-          disabled={!changed || invalid !== null || update.isPending}
+          disabled={invalid !== null || update.isPending}
           onClick={() => update.mutate(limits)}
         >
-          {update.isPending ? "Applying…" : "Apply limits"}
+          {update.isPending ? "Applying…" : changed ? "Apply limits" : "Re-apply"}
         </Button>
       </ModalFoot>
     </Dialog>

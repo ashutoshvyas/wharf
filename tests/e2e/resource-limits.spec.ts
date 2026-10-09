@@ -74,6 +74,23 @@ test("empty fields mean unlimited, and a failed apply shows the server's reason"
   expect(patched).toEqual({ cpuLimit: null, memoryLimitMb: null });
 });
 
+test("unchanged, already-applied limits can be re-applied to pick up configuration updates", async ({ page }) => {
+  await login(page, "admin");
+  let patched: unknown;
+  await page.route(`**/api/db-instances/${INSTANCE.id}/resource-limits`, async (route) => {
+    patched = route.request().postDataJSON();
+    await route.fulfill({ json: { ...INSTANCE, resourceLimitsAppliedAt: "2026-10-10T00:00:00.000Z", recreated: true } });
+  });
+
+  const dialog = await openLimits(page, { ...INSTANCE, resourceLimitsAppliedAt: "2026-10-01T00:00:00.000Z" });
+  await expect(dialog.getByText(/brings this instance's configuration up to date/)).toBeVisible();
+  const reapply = dialog.getByRole("button", { name: "Re-apply" });
+  await expect(reapply).toBeEnabled();
+  await reapply.click();
+  await expect(dialog).toBeHidden();
+  expect(patched).toEqual({ cpuLimit: 1, memoryLimitMb: 3072 });
+});
+
 test("operators do not see the resource-limits action", async ({ page }) => {
   await page.route(/\/api\/db-instances(?:\?.*)?$/, (route) => route.fulfill({ json: [INSTANCE] }));
   await login(page, "operator");

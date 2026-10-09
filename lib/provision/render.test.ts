@@ -12,6 +12,7 @@ import { deriveAnalyticsSecrets, deriveAncillarySecrets, type InstanceSecrets } 
 import {
   DEFAULT_AUTH_SETTINGS,
   HEALTHCHECK_POLICY,
+  INHERITED_HEALTHCHECK_DEFAULTS,
   instanceServices,
   KONG_WORKER_PROCESSES,
   SERVICE_LIMITS,
@@ -64,7 +65,12 @@ function withoutRuntimePolicy(service: Record<string, unknown> | undefined) {
   delete copy.mem_limit;
   delete copy.cgroup_parent;
   const healthcheck = copy.healthcheck as Record<string, unknown> | undefined;
-  if (healthcheck) for (const key of Object.keys(HEALTHCHECK_POLICY)) delete healthcheck[key];
+  if (healthcheck) {
+    for (const key of Object.keys(HEALTHCHECK_POLICY)) delete healthcheck[key];
+    // A check with no `test` is the timing-only block added for a service
+    // whose check comes from its image — wholly owned by the runtime policy.
+    if (!("test" in healthcheck)) delete copy.healthcheck;
+  }
   const env = copy.environment as Record<string, unknown> | undefined;
   if (env) delete env.KONG_NGINX_WORKER_PROCESSES;
   return copy;
@@ -405,6 +411,39 @@ describe("renderInstanceCompose — runtime policy", () => {
         name,
         { interval: "60s", start_interval: "3s", start_period: "180s" },
       ]);
+    }
+  });
+
+  it("retimes health checks inherited from the image, keeping the image's own probe", async () => {
+    const template = load(
+      await readFile(path.join(process.cwd(), "templates", "supabase", "docker-compose.yml"), "utf8"),
+    ) as ComposeDoc;
+    // Regression: meta declares no healthcheck, so it ran postgres-meta's
+    // image HEALTHCHECK at its 5s default and escaped HEALTHCHECK_POLICY.
+    expect(template.services.meta?.healthcheck).toBeUndefined();
+
+    const { doc } = await renderDoc();
+    // No `test` (so Docker keeps the image's command) and no `disable`.
+    expect(doc.services.meta?.healthcheck).toEqual({
+      interval: "60s",
+      start_interval: "3s",
+      start_period: "180s",
+      timeout: "10s",
+      retries: 3,
+    });
+    expect(INHERITED_HEALTHCHECK_DEFAULTS).toEqual({ timeout: "10s", retries: 3 });
+  });
+
+  it("leaves no long-running service on a default or image-chosen cadence", async () => {
+    const { doc } = await renderDoc();
+    for (const [name, service] of Object.entries(doc.services)) {
+      const healthcheck = service?.healthcheck as Record<string, unknown> | undefined;
+      if (service?.restart === "no") {
+        // One-shots exit by design; they get no check.
+        expect([name, healthcheck]).toEqual([name, undefined]);
+        continue;
+      }
+      expect([name, healthcheck?.interval, healthcheck?.disable]).toEqual([name, "60s", undefined]);
     }
   });
 

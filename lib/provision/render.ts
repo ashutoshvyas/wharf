@@ -435,7 +435,8 @@ function joinNetwork(service: ComposeService, network: string, alias?: string): 
 }
 
 /**
- * Health-check cadence applied to every service that declares one.
+ * Health-check cadence applied to every long-running service — those that
+ * declare a check, and those that inherit one from their image.
  *
  * Upstream probes most services every 5s — tuned for one stack on a laptop.
  * Each probe is a `docker exec` (studio's spawns a whole Node.js runtime), so
@@ -451,6 +452,13 @@ export const HEALTHCHECK_POLICY = {
   start_interval: "3s",
   start_period: "180s",
 } as const;
+
+/**
+ * Timeout/retries for a service whose health check comes from its IMAGE
+ * (a Dockerfile HEALTHCHECK) rather than the template — currently `meta`.
+ * Services that declare their own check keep its timeout/retries.
+ */
+export const INHERITED_HEALTHCHECK_DEFAULTS = { timeout: "10s", retries: 3 } as const;
 
 /**
  * Per-service CPU/memory caps, so one runaway container (or one tenant) can't
@@ -494,6 +502,15 @@ function applyRuntimePolicy(doc: ComposeFile, templatePath: string, project: str
     if (healthcheck && !healthcheck.disable) Object.assign(healthcheck, HEALTHCHECK_POLICY);
 
     if (service.restart === "no") continue;
+
+    // No `healthcheck:` in the template does NOT mean no health check: the
+    // container inherits its image's HEALTHCHECK (postgres-meta probes every
+    // 5s). A timing-only block — no `test` — makes Docker keep the image's
+    // command and take every field set here, so the probe stays and only its
+    // cadence changes. An image without a HEALTHCHECK gets none either way.
+    if (!healthcheck) {
+      service.healthcheck = { ...HEALTHCHECK_POLICY, ...INHERITED_HEALTHCHECK_DEFAULTS };
+    }
     const limits = SERVICE_LIMITS[name];
     if (!limits) {
       throw new Error(
