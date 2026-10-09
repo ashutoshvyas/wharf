@@ -17,7 +17,7 @@ regexes = ['''MC4CAQAwBQYDK2VwBCIEIFakeFakeFakeFakeFakeFakeFakeFakeFakeFake''']
 description = "Fixed fake password used by pure rendering regression tests"
 targetRules = ["generic-api-key"]
 condition = "AND"
-paths = ['''(^|/)lib/provision/render\.test\.ts$''']
+paths = ['''(^|/)lib/provision/(render|stored-settings)\.test\.ts$''']
 regexTarget = "secret"
 regexes = ['''^aB3dE6gH9jK2mN5pQ8sT1vW4xY7zA0bC$''']
 
