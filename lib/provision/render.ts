@@ -33,6 +33,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { dump, load } from "js-yaml";
+import { instanceSliceName } from "@/lib/instances/resource-limits";
 import {
   POOLER_NETWORK,
   TRAEFIK_NETWORK,
@@ -478,9 +479,16 @@ export const SERVICE_LIMITS: Record<string, { cpus: number; mem_limit?: string }
  */
 export const KONG_WORKER_PROCESSES = "2";
 
-/** Apply HEALTHCHECK_POLICY and SERVICE_LIMITS to every service in `doc`. */
-function applyRuntimePolicy(doc: ComposeFile, templatePath: string): void {
+/**
+ * Apply HEALTHCHECK_POLICY and SERVICE_LIMITS to every service in `doc`, and
+ * put every service — one-shots included — in the instance's systemd slice,
+ * whose CPU/memory budget lib/provision/resource-limits.ts manages. The slice
+ * name is derived from the project alone, so every re-render emits it.
+ */
+function applyRuntimePolicy(doc: ComposeFile, templatePath: string, project: string): void {
+  const slice = instanceSliceName(project);
   for (const [name, service] of Object.entries(doc.services)) {
+    service.cgroup_parent = slice;
     const healthcheck = service.healthcheck as Record<string, unknown> | undefined;
     if (healthcheck && !healthcheck.disable) Object.assign(healthcheck, HEALTHCHECK_POLICY);
 
@@ -551,7 +559,7 @@ async function renderCompose(
     }
   }
 
-  applyRuntimePolicy(doc, templatePath);
+  applyRuntimePolicy(doc, templatePath, input.project);
 
   joinNetwork(kong, TRAEFIK_NETWORK);
   joinNetwork(studio, TRAEFIK_NETWORK);

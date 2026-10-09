@@ -60,6 +60,10 @@ export interface DbInstanceRecord {
   apiSubdomain: string;
   studioSubdomain: string;
   sslMode: InstanceSslMode;
+  cpuLimit: number | null;
+  memoryLimitMb: number | null;
+  resourceLimitsAppliedAt: Date | null;
+  resourceLimitsError: string | null;
   status: string;
   lastActionLog: string | null;
   healthCheckedAt: Date | null;
@@ -96,6 +100,12 @@ export interface SerializedDbInstance {
   apiSubdomain: string;
   studioSubdomain: string;
   sslMode: InstanceSslMode;
+  /** Whole-instance budget; null = unlimited (lib/instances/resource-limits.ts). */
+  cpuLimit: number | null;
+  memoryLimitMb: number | null;
+  /** Null until the server confirms the budget — see resourceLimitsError for why not. */
+  resourceLimitsAppliedAt: string | null;
+  resourceLimitsError: string | null;
   status: string;
   lastActionLog: string | null;
   healthCheckedAt: string | null;
@@ -118,6 +128,10 @@ export function serializeInstance(
     apiSubdomain: instance.apiSubdomain,
     studioSubdomain: instance.studioSubdomain,
     sslMode: instance.sslMode,
+    cpuLimit: instance.cpuLimit,
+    memoryLimitMb: instance.memoryLimitMb,
+    resourceLimitsAppliedAt: instance.resourceLimitsAppliedAt?.toISOString() ?? null,
+    resourceLimitsError: instance.resourceLimitsError,
     status: instance.status,
     lastActionLog: instance.lastActionLog ?? null,
     healthCheckedAt: instance.healthCheckedAt

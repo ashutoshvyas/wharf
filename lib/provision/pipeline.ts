@@ -42,9 +42,11 @@ import { open } from "@/lib/crypto";
 import { serverLockHolder, tryAcquireServerLock } from "@/lib/jobs/lock";
 import { isInstanceSslMode, type InstanceSslMode } from "@/lib/instances/ssl-mode";
 import { DEFAULT_NETWORK_ACCESS, readNetworkAccess, type NetworkAccessPolicy } from "@/lib/instances/network-access";
+import { formatResourceLimits, instanceSliceName, type ResourceLimits } from "@/lib/instances/resource-limits";
 import { endJob, publish, startJob } from "@/lib/jobs/stream";
 import { exec, sftpWrite, withConnection } from "@/lib/ssh";
 import { waitForHealthy } from "./health";
+import { installInstanceSlice } from "./resource-limits";
 import { provisionJobId } from "./job-ids";
 import { composeProjectName, isValidSlug, remotePathFor, subdomainsFor } from "./naming";
 import { assertPoolerNetworkPolicy, readPoolerNetworkState, registerPoolerTenant } from "./pooler";
@@ -167,6 +169,7 @@ interface PipelineRow {
   studioSubdomain: string;
   sslMode: InstanceSslMode;
   networkAccess: NetworkAccessPolicy | null;
+  resourceLimits: ResourceLimits;
   /**
    * Secrets already stored for this instance, when there are any — retry
    * REUSES them instead of minting new ones. See {@link resolveSecrets}.
@@ -242,6 +245,8 @@ async function runPipeline(
   const domain = process.env.INSTANCE_DOMAIN ?? "";
   /** Set inside the pooler phase's own catch — see its comment below. */
   let poolerFailed: string | null = null;
+  /** Why the instance's slice could not be installed; null when it was. */
+  let limitsFailed: string | null = null;
 
   try {
     // `validate` already ran synchronously in startProvision/retryProvision —
@@ -337,6 +342,22 @@ async function runPipeline(
       });
 
       await runPhase(phaseOpts, "start", async () => {
+        // Before `up -d`: Docker fixes a container's cgroup at creation, so the
+        // slice must exist with its limits before the first container does.
+        // Best-effort — an unsupported server still gets a working instance,
+        // just an unlimited one, flagged in the panel as not applied.
+        try {
+          await installInstanceSlice(conn, row.composeProjectName, row.resourceLimits);
+          emit(
+            "info",
+            `resource limits: ${formatResourceLimits(row.resourceLimits)} ` +
+              `(${instanceSliceName(row.composeProjectName)})`,
+          );
+        } catch (err) {
+          limitsFailed = err instanceof Error ? err.message : String(err);
+          emit("info", `resource limits not applied — ${limitsFailed}`);
+        }
+
         const stream = lineStreamer(emit);
         // `cd` first: compose resolves the project directory (and therefore
         // `.env`) from the working directory when given a bare `-p`.
@@ -422,6 +443,8 @@ async function runPipeline(
         // itself; it does not mean the containers or these secrets are bad.
         status: poolerFailed ? "error" : "running",
         healthCheckedAt: new Date(),
+        resourceLimitsAppliedAt: limitsFailed ? null : new Date(),
+        resourceLimitsError: limitsFailed,
         lastActionLog: tail.text(),
       },
     });
@@ -570,6 +593,7 @@ export async function startProvision(input: {
       studioSubdomain,
       sslMode: input.sslMode,
       networkAccess: DEFAULT_NETWORK_ACCESS,
+      resourceLimits: { cpuLimit: created.cpuLimit, memoryLimitMb: created.memoryLimitMb },
     };
   } catch (err) {
     release();
@@ -655,6 +679,7 @@ export async function retryProvision(
       studioSubdomain: instance.studioSubdomain,
       sslMode: instance.sslMode,
       networkAccess: readNetworkAccess(instance.networkAccess),
+      resourceLimits: { cpuLimit: instance.cpuLimit, memoryLimitMb: instance.memoryLimitMb },
       // Retry keeps this instance's identity — see resolveSecrets.
       existingSecrets: readStoredSecrets(instance),
     },

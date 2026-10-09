@@ -105,6 +105,8 @@ const ROW = {
   apiSubdomain: "clienta.wharf.example.com",
   studioSubdomain: "studio-clienta.wharf.example.com",
   sslMode: "require" as const,
+  cpuLimit: 1,
+  memoryLimitMb: 3072,
   status: "provisioning",
   deletedAt: null,
 };
@@ -477,5 +479,43 @@ describe("stopInstance", () => {
       execMock.mock.calls.some((c) => String(c[1]).includes("stop")),
     ).toBe(true);
     expect(serverLockHolder("srv-1")).toBeNull();
+  });
+});
+
+describe("startProvision — per-instance resource limits", () => {
+  const finalData = () =>
+    instanceUpdate.mock.calls
+      .map((c) => (c[0] as { data?: Record<string, unknown> }).data)
+      .find((d) => d?.status === "running");
+
+  it("installs the instance's slice before the first container is created", async () => {
+    execMock.mockImplementation(async (_c: unknown, cmd: string) =>
+      cmd.startsWith("docker info") ? ok("systemd 2\n") : ok(),
+    );
+    await startProvision(BASE);
+    const { lines } = await watchJob(provisionJobId("inst-1"));
+
+    const cmds = execMock.mock.calls.map((c) => String(c[1]));
+    const sliceAt = cmds.findIndex((c) => /set-property --runtime wharf-sb_[0-9a-f]{4}\.slice/.test(c));
+    const upAt = cmds.findIndex((c) => c.includes("up -d"));
+    expect(sliceAt).toBeGreaterThanOrEqual(0);
+    expect(upAt).toBeGreaterThan(sliceAt);
+    expect(lines.some((l) => l.includes("resource limits: 1 CPU · 3 GB"))).toBe(true);
+    expect(finalData()).toMatchObject({ resourceLimitsAppliedAt: expect.any(Date), resourceLimitsError: null });
+  });
+
+  it("still provisions on a server without systemd cgroups, recording why limits are not applied", async () => {
+    execMock.mockImplementation(async (_c: unknown, cmd: string) =>
+      cmd.startsWith("docker info") ? ok("cgroupfs 1\n") : ok(),
+    );
+    await startProvision(BASE);
+    const { lines } = await watchJob(provisionJobId("inst-1"));
+
+    expect(status2(lines)).toBe("ok");
+    expect(execMock.mock.calls.some((c) => String(c[1]).includes("up -d"))).toBe(true);
+    expect(finalData()).toMatchObject({
+      resourceLimitsAppliedAt: null,
+      resourceLimitsError: expect.stringMatching(/systemd cgroup driver/),
+    });
   });
 });

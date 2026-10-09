@@ -41,6 +41,7 @@ import { jobKindFor, ProvisionProgress, type JobKind } from "./provision-progres
 import { RestoreBackupModal } from "./restore-backup-modal";
 import { SecretsModal } from "./secrets-modal";
 import { SslModeModal } from "./ssl-mode-modal";
+import { ResourceLimitsModal } from "./resource-limits-modal";
 
 const POLL_TRANSITIONAL_MS = 5_000;
 const POLL_IDLE_MS = 30_000;
@@ -84,6 +85,7 @@ export function DatabasesView({
   const [cloneFor, setCloneFor] = useState<InstanceDto | null>(null);
   const [modalCloningId, setModalCloningId] = useState<string | null>(null);
   const [sslModeFor, setSslModeFor] = useState<InstanceDto | null>(null);
+  const [limitsFor, setLimitsFor] = useState<InstanceDto | null>(null);
   /**
    * The dialog's job kind is tracked explicitly here rather than derived from
    * `instance.status` — a mutation's `onSuccess` only ever sees the row as it
@@ -185,6 +187,7 @@ export function DatabasesView({
           if (canRestore) setCloneFor(instance);
         }}
         onSslMode={() => setSslModeFor(instance)}
+        onResourceLimits={() => setLimitsFor(instance)}
         onExpandProgress={() => setProgress({ instance, kind: jobKindFor(instance) })}
       />
     );
@@ -282,6 +285,12 @@ export function DatabasesView({
         open={sslModeFor !== null}
         onClose={() => setSslModeFor(null)}
         instance={sslModeFor}
+      />
+
+      <ResourceLimitsModal
+        open={limitsFor !== null}
+        onClose={() => setLimitsFor(null)}
+        instance={limitsFor}
       />
 
       <LogTailModal

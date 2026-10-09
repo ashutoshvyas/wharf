@@ -40,6 +40,7 @@ import {
   type ProvisionCtx,
 } from "./pipeline";
 import { deregisterPoolerTenant } from "./pooler";
+import { removeInstanceSlice } from "./resource-limits";
 
 /** The connection handle lib/ssh hands out (ssh2 Client, never imported here). */
 type SshConnection = Parameters<typeof exec>[0];
@@ -237,6 +238,8 @@ async function runTeardown(
           throw new Error(`rm -rf ${safePath} failed (code ${res.code}): ${res.stderr.trim()}`);
         }
         emit("info", `deleted ${safePath}`);
+        // Best-effort: a leftover slice unit is inert once its containers are gone.
+        await removeInstanceSlice(conn, row.composeProjectName).catch(() => undefined);
       });
     });
   };

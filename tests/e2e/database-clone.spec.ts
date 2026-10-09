@@ -16,6 +16,7 @@ function instance(index: number, name: string, status: InstanceDto["status"] = "
     composeProjectName: `sb_clone_${index}`, remotePath: `/unused/clone-${index}`,
     apiSubdomain: `clone-${index}.example.test`, studioSubdomain: `clone-${index}-studio.example.test`,
     sslMode: "require", status, activeJob: null, lastActionLog: null, healthCheckedAt: null,
+    cpuLimit: 1, memoryLimitMb: 3072, resourceLimitsAppliedAt: null, resourceLimitsError: null,
     createdAt: "2026-09-01T00:00:00.000Z", updatedAt: "2026-09-01T00:00:00.000Z",
   };
 }

@@ -106,6 +106,14 @@ model DbInstance {
   networkAccess      Json?          @map("network_access")
   networkAccessAppliedAt DateTime?  @map("network_access_applied_at")
   networkAccessError String?        @map("network_access_error")
+  // Whole-instance CPU/memory budget, enforced by a per-instance systemd
+  // slice (lib/provision/resource-limits.ts). Null = unlimited. Applied-at is
+  // null until the server confirms it — rows predating this feature carry the
+  // defaults but run unlimited until an operator applies them.
+  cpuLimit           Float?         @default(1) @map("cpu_limit")
+  memoryLimitMb      Int?           @default(3072) @map("memory_limit_mb")
+  resourceLimitsAppliedAt DateTime? @map("resource_limits_applied_at")
+  resourceLimitsError String?       @map("resource_limits_error")
   pgPasswordEnc      Bytes?         @map("pg_password_enc")
   anonKeyEnc         Bytes?         @map("anon_key_enc")
   serviceRoleKeyEnc  Bytes?         @map("service_role_key_enc")

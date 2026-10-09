@@ -54,13 +54,14 @@ async function renderDoc(overrides: Partial<RenderInstanceInput> = {}) {
 
 /**
  * A service minus what applyRuntimePolicy owns (health-check cadence, CPU/
- * memory caps, kong's worker count) — covered by their own tests, so the
+ * memory caps, slice, kong's worker count) — covered by their own tests, so the
  * template-integrity tests compare everything else.
  */
 function withoutRuntimePolicy(service: Record<string, unknown> | undefined) {
   const copy: Record<string, unknown> = structuredClone(service ?? {});
   delete copy.cpus;
   delete copy.mem_limit;
+  delete copy.cgroup_parent;
   const healthcheck = copy.healthcheck as Record<string, unknown> | undefined;
   if (healthcheck) for (const key of Object.keys(HEALTHCHECK_POLICY)) delete healthcheck[key];
   const env = copy.environment as Record<string, unknown> | undefined;
@@ -427,6 +428,13 @@ describe("renderInstanceCompose — runtime policy", () => {
       }
       expect([name, service?.cpus]).toEqual([name, SERVICE_LIMITS[name]?.cpus]);
       expect([name, service?.mem_limit]).toEqual([name, SERVICE_LIMITS[name]?.mem_limit]);
+    }
+  });
+
+  it("puts every service, one-shots included, in the instance's own systemd slice", async () => {
+    const { doc } = await renderDoc();
+    for (const [name, service] of Object.entries(doc.services)) {
+      expect([name, service?.cgroup_parent]).toEqual([name, "wharf-sb_4f2a.slice"]);
     }
   });
 

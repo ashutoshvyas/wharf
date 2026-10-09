@@ -31,6 +31,7 @@ describe("can() — role matrix spot checks", () => {
       "instance.restore",
       "instance.ssl-mode.write",
       "instance.network-access.write",
+      "instance.resource-limits.write",
       "instance.auth-settings.write",
       "secrets.reveal",
       "users",
@@ -66,6 +67,7 @@ describe("can() — role matrix spot checks", () => {
       "instance.restore",
       "instance.ssl-mode.write",
       "instance.network-access.write",
+      "instance.resource-limits.write",
       "instance.auth-settings.write",
       "users",
     ];
@@ -92,6 +94,7 @@ describe("can() — role matrix spot checks", () => {
       "instance.restore",
       "instance.ssl-mode.write",
       "instance.network-access.write",
+      "instance.resource-limits.write",
       "instance.auth-settings.write",
       "secrets.reveal",
       "audit.read",

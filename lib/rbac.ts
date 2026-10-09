@@ -26,6 +26,7 @@ export type Action =
   | "instance.restore"
   | "instance.ssl-mode.write"
   | "instance.network-access.write"
+  | "instance.resource-limits.write"
   | "instance.auth-settings.write"
   | "secrets.reveal"
   | "audit.read"
@@ -55,6 +56,9 @@ const MATRIX: Record<Action, Role[]> = {
   // Changes whether the public database pooler accepts plaintext clients.
   "instance.ssl-mode.write": ADMIN_ONLY,
   "instance.network-access.write": ADMIN_ONLY,
+  // A too-small budget throttles or OOM-kills a tenant's stack, and the first
+  // apply on an older instance recreates every container.
+  "instance.resource-limits.write": ADMIN_ONLY,
   // Sensitive infra config (OAuth client secrets, SMTP credentials) — same
   // tier as servers.write. Viewing is gated by secrets.reveal (below).
   "instance.auth-settings.write": ADMIN_ONLY,

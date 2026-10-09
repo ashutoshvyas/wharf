@@ -17,6 +17,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Copy,
   Ellipsis,
+  Gauge,
   KeyRound,
   RotateCcw,
   ScrollText,
@@ -24,6 +25,7 @@ import {
   Trash2,
   Upload,
 } from "lucide-react";
+import { formatResourceLimits } from "@/lib/instances/resource-limits";
 import { can, type Role } from "@/lib/rbac";
 import { Alert } from "@/components/ui/alert";
 import { Button, ButtonLink } from "@/components/ui/button";
@@ -53,6 +55,7 @@ export interface InstanceCardProps {
   onRestore: () => void;
   onClone: () => void;
   onSslMode: () => void;
+  onResourceLimits: () => void;
   /** Opens the full-size progress dialog for this instance. */
   onExpandProgress: () => void;
   /** A progress dialog is already open for this instance — it owns the toast. */
@@ -70,6 +73,7 @@ export function InstanceCard({
   onRestore,
   onClone,
   onSslMode,
+  onResourceLimits,
   onExpandProgress,
   silentProgress = false,
   layout = "cards",
@@ -83,6 +87,7 @@ export function InstanceCard({
   const canRemove = can(role, "instance.remove");
   const canRestore = can(role, "instance.restore");
   const canChangeSslMode = can(role, "instance.ssl-mode.write");
+  const canChangeLimits = can(role, "instance.resource-limits.write");
   const canReveal = can(role, "secrets.reveal");
 
   const busy = isTransitional(instance.status);
@@ -128,6 +133,15 @@ export function InstanceCard({
           label: "Change SSL mode…",
           icon: <ShieldCheck size={15} strokeWidth={1.75} />,
           onSelect: onSslMode,
+        } satisfies DropdownItem,
+      ]
+      : []),
+    ...(canChangeLimits
+      ? [
+        {
+          label: "Resource limits…",
+          icon: <Gauge size={15} strokeWidth={1.75} />,
+          onSelect: onResourceLimits,
         } satisfies DropdownItem,
       ]
       : []),
@@ -337,8 +351,11 @@ export function InstanceCard({
       </div>
 
       <div className="mb-3.5 text-[12.5px] text-neutral-400">
-        {instance.sslMode === "require" ? "TLS required" : "TLS not enforced"} · created{" "}
-        {formatDate(instance.createdAt)}
+        {instance.sslMode === "require" ? "TLS required" : "TLS not enforced"} ·{" "}
+        {instance.resourceLimitsAppliedAt
+          ? formatResourceLimits(instance)
+          : <span className="text-warning">limits not applied</span>}{" "}
+        · created {formatDate(instance.createdAt)}
       </div>
 
       {isError ? (

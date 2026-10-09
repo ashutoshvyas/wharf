@@ -23,6 +23,10 @@ no decrypted value ever appears here; key material comes only from
   "apiSubdomain": "clienta.wharf.example.com",
   "studioSubdomain": "studio-clienta.wharf.example.com",
   "sslMode": "require",                          // require | disable
+  "cpuLimit": 1,                                 // cores; null = unlimited
+  "memoryLimitMb": 3072,                         // MiB; null = unlimited
+  "resourceLimitsAppliedAt": null,               // null until the server confirmed the budget
+  "resourceLimitsError": null,                   // why the last apply failed
   "status": "provisioning",                       // see §2
   "lastActionLog": "…tail…" ,                     // null unless an action ran
   "healthCheckedAt": "2000-01-01T18:00:00.000Z",  // nullable

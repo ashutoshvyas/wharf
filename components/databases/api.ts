@@ -47,6 +47,12 @@ export interface InstanceDto {
   apiSubdomain: string;
   studioSubdomain: string;
   sslMode: InstanceSslMode;
+  /** Whole-instance budget; null = unlimited. */
+  cpuLimit: number | null;
+  memoryLimitMb: number | null;
+  /** Null until the server confirmed the budget; resourceLimitsError says why not. */
+  resourceLimitsAppliedAt: string | null;
+  resourceLimitsError: string | null;
   status: InstanceStatus;
   /**
    * Which engine currently holds a live job — `restoring` alone is
@@ -420,6 +426,17 @@ export async function updateInstanceSslMode(
   return apiFetch<InstanceDto>(
     `/api/db-instances/${id}/ssl-mode`,
     jsonInit("PATCH", { sslMode }),
+  );
+}
+
+/** PATCH /api/db-instances/:id/resource-limits — null = unlimited. */
+export async function updateResourceLimits(
+  id: string,
+  limits: { cpuLimit: number | null; memoryLimitMb: number | null },
+): Promise<InstanceDto & { recreated: boolean }> {
+  return apiFetch<InstanceDto & { recreated: boolean }>(
+    `/api/db-instances/${id}/resource-limits`,
+    jsonInit("PATCH", limits),
   );
 }
 

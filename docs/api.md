@@ -294,6 +294,10 @@ material comes only from the audited secrets route:
   "remotePath": "/opt/db-instances/sb_4f2a",
   "apiSubdomain": "clienta.wharf.example.com",
   "studioSubdomain": "studio-clienta.wharf.example.com",
+  "cpuLimit": "number | null",
+  "memoryLimitMb": "number | null",
+  "resourceLimitsAppliedAt": "ISO-8601 | null",
+  "resourceLimitsError": "string | null",
   "status": "provisioning | running | stopped | error | removing | restoring",
   "activeJob": "provision | remove | restore | sync | clone | null",
   "lastActionLog": "…tail… | null",
@@ -371,6 +375,31 @@ exceptions are noted inline.
 - **Errors:** 400 (unsupported mode), 403, 404, 409 (server busy or the
   instance never stored its database password), 500 (SSH/pooler failure).
 - **Audit:** `instance.ssl-mode.update` with `{sslMode}`.
+
+### PATCH /api/db-instances/:id/resource-limits
+
+- **Role:** **admin** (`instance.resource-limits.write`).
+- **Request body:** `{"cpuLimit": 1.5, "memoryLimitMb": 3072}`. `null` on
+  either field means unlimited. CPU: 0.25–64 cores, two decimals at most.
+  Memory: 1536–262144 MiB, whole MiB.
+- **Behavior:** one whole-instance budget, enforced by the instance's systemd
+  slice `wharf-<project>.slice` (every container is created inside it via
+  compose `cgroup_parent`). Writes `/etc/systemd/system/<slice>` and applies
+  the same values live with `systemctl set-property --runtime`, which restarts
+  nothing. If any of the instance's containers were created before the slice
+  existed, the compose file is re-rendered from all stored settings and the
+  stack is recreated once with `up -d` (about a minute of downtime). That
+  path is refused for a stopped instance. Needs Docker's systemd cgroup
+  driver on cgroup v2. The budget is saved even when applying fails, with
+  the reason in `resourceLimitsError` and `resourceLimitsAppliedAt` null.
+- **Response:** `200` — the refreshed serialized instance plus
+  `recreated: boolean`.
+- **Errors:** 400 (out-of-range values), 403, 404, 409 (server busy, instance
+  in a transitional state, stopped instance whose containers predate the
+  slice, or no stored secrets), 502 (`Limits saved but not applied — …`:
+  unsupported cgroup setup, SSH or compose failure).
+- **Audit:** `instance.resource-limits.update` with
+  `{cpuLimit, memoryLimitMb, applied, recreated?}`.
 
 ### DELETE /api/db-instances/:id
 
