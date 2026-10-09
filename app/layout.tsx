@@ -1,18 +1,21 @@
 import type { Metadata } from "next";
-import { Figtree, JetBrains_Mono } from "next/font/google";
+import localFont from "next/font/local";
 import { ToastProvider } from "@/components/ui/toast";
 import "./globals.css";
 
-const figtree = Figtree({
-  subsets: ["latin"],
+const figtree = localFont({
+  src: "./fonts/Figtree.ttf",
   variable: "--font-figtree",
-  weight: ["400", "500", "600", "700", "800"],
+  weight: "300 900",
+  display: "swap",
 });
 
-const jetbrains = JetBrains_Mono({
-  subsets: ["latin"],
+const jetbrains = localFont({
+  src: "./fonts/JetBrainsMono.ttf",
   variable: "--font-jetbrains",
-  weight: ["400", "500", "600"],
+  weight: "100 800",
+  display: "swap",
+  adjustFontFallback: false,
 });
 
 export const metadata: Metadata = {
