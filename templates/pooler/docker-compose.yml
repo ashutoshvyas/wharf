@@ -66,12 +66,19 @@ services:
       POSTGRES_DB: supavisor
     volumes:
       - ./pooler-db-data:/var/lib/postgresql/data
+    # Probe fast only until first healthy (start_interval, Docker Engine 25+),
+    # then once a minute — same policy as instance stacks, see
+    # HEALTHCHECK_POLICY in lib/provision/render.ts for why.
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U supavisor_admin -d supavisor"]
-      interval: 5s
+      interval: 60s
+      start_interval: 3s
       timeout: 5s
       retries: 10
-      start_period: 20s
+      start_period: 180s
+    # Metadata only (tenant/cluster/user config), so small fixed caps.
+    cpus: 0.5
+    mem_limit: 256m
     networks:
       - internal
 
@@ -103,10 +110,13 @@ services:
           "/dev/null",
           "http://127.0.0.1:4000/api/health",
         ]
-      interval: 10s
+      interval: 60s
+      start_interval: 3s
       timeout: 5s
       retries: 10
-      start_period: 30s
+      start_period: 180s
+    # Deliberately uncapped: every tenant's pooled connections flow through
+    # this one container, so a CPU/memory cap would throttle or drop them all.
     environment:
       PORT: "4000"
       # Supavisor's OWN metadata store — a dedicated database on pooler-db,

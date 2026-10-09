@@ -11,6 +11,9 @@ import {
 import { deriveAnalyticsSecrets, deriveAncillarySecrets, type InstanceSecrets } from "./secrets";
 import {
   DEFAULT_AUTH_SETTINGS,
+  HEALTHCHECK_POLICY,
+  KONG_WORKER_PROCESSES,
+  SERVICE_LIMITS,
   kongLabels,
   renderInstanceCompose,
   serviceNetworkNames,
@@ -47,6 +50,22 @@ interface ComposeDoc {
 async function renderDoc(overrides: Partial<RenderInstanceInput> = {}) {
   const { composeYaml, envFile } = await renderInstanceCompose({ ...INPUT, ...overrides });
   return { composeYaml, envFile, doc: load(composeYaml) as ComposeDoc };
+}
+
+/**
+ * A service minus what applyRuntimePolicy owns (health-check cadence, CPU/
+ * memory caps, kong's worker count) — covered by their own tests, so the
+ * template-integrity tests compare everything else.
+ */
+function withoutRuntimePolicy(service: Record<string, unknown> | undefined) {
+  const copy: Record<string, unknown> = structuredClone(service ?? {});
+  delete copy.cpus;
+  delete copy.mem_limit;
+  const healthcheck = copy.healthcheck as Record<string, unknown> | undefined;
+  if (healthcheck) for (const key of Object.keys(HEALTHCHECK_POLICY)) delete healthcheck[key];
+  const env = copy.environment as Record<string, unknown> | undefined;
+  if (env) delete env.KONG_NGINX_WORKER_PROCESSES;
+  return copy;
 }
 
 function envValue(envFile: string, key: string): string | undefined {
@@ -293,7 +312,10 @@ describe("renderInstanceCompose — vendored template integrity", () => {
       // tests below, which assert exactly what changed.
       if (name === "kong" || name === "studio" || name === "db" || name === "auth") continue;
       const { doc } = await renderDoc();
-      expect([name, doc.services[name]]).toEqual([name, template.services[name]]);
+      expect([name, withoutRuntimePolicy(doc.services[name])]).toEqual([
+        name,
+        withoutRuntimePolicy(template.services[name]),
+      ]);
     }
     expect((load((await renderDoc()).composeYaml) as ComposeDoc).volumes).toEqual(
       template.volumes,
@@ -333,8 +355,8 @@ describe("renderInstanceCompose — vendored template integrity", () => {
     ) as ComposeDoc;
     const { doc } = await renderDoc();
     for (const name of ["kong", "studio"]) {
-      const before = { ...(template.services[name] ?? {}) };
-      const after = { ...(doc.services[name] ?? {}) };
+      const before = withoutRuntimePolicy(template.services[name]);
+      const after = withoutRuntimePolicy(doc.services[name]);
       for (const key of ["labels", "networks", "ports"]) {
         delete before[key];
         delete after[key];
@@ -348,8 +370,8 @@ describe("renderInstanceCompose — vendored template integrity", () => {
       await readFile(path.join(process.cwd(), "templates", "supabase", "docker-compose.yml"), "utf8"),
     ) as ComposeDoc;
     const { doc } = await renderDoc();
-    const before = { ...(template.services.db ?? {}) };
-    const after = { ...(doc.services.db ?? {}) };
+    const before = withoutRuntimePolicy(template.services.db);
+    const after = withoutRuntimePolicy(doc.services.db);
     delete before.networks;
     delete after.networks;
     expect(after).toEqual(before);
@@ -368,6 +390,55 @@ describe("renderInstanceCompose — vendored template integrity", () => {
     expect(composeYaml).toContain("/opt/db-instances/sb_4f2a");
     expect(composeYaml).toContain("https://clienta.wharf.example.com");
     expect(composeYaml).toContain("https://studio-clienta.wharf.example.com");
+  });
+});
+
+describe("renderInstanceCompose — runtime policy", () => {
+  it("probes every health-checked service once a minute, fast only until first healthy", async () => {
+    const { doc } = await renderDoc();
+    const checked = Object.entries(doc.services).filter(([, s]) => s?.healthcheck);
+    expect(checked.length).toBeGreaterThanOrEqual(8);
+    for (const [name, service] of checked) {
+      expect([name, service?.healthcheck]).toMatchObject([
+        name,
+        { interval: "60s", start_interval: "3s", start_period: "180s" },
+      ]);
+    }
+  });
+
+  it("keeps each probe's own test, timeout and retries from the template", async () => {
+    const template = load(
+      await readFile(path.join(process.cwd(), "templates", "supabase", "docker-compose.yml"), "utf8"),
+    ) as ComposeDoc;
+    const { doc } = await renderDoc();
+    const db = doc.services.db?.healthcheck as Record<string, unknown>;
+    const templateDb = template.services.db?.healthcheck as Record<string, unknown>;
+    expect(db.test).toEqual(templateDb.test);
+    expect(db.timeout).toBe(templateDb.timeout);
+    expect(db.retries).toBe(templateDb.retries);
+  });
+
+  it("caps CPU on every long-running service and exempts one-shot init services", async () => {
+    const { doc } = await renderDoc();
+    for (const [name, service] of Object.entries(doc.services)) {
+      if (service?.restart === "no") {
+        expect([name, service.cpus]).toEqual([name, undefined]);
+        continue;
+      }
+      expect([name, service?.cpus]).toEqual([name, SERVICE_LIMITS[name]?.cpus]);
+      expect([name, service?.mem_limit]).toEqual([name, SERVICE_LIMITS[name]?.mem_limit]);
+    }
+  });
+
+  it("leaves db without a memory cap", async () => {
+    const { doc } = await renderDoc();
+    expect(doc.services.db?.mem_limit).toBeUndefined();
+  });
+
+  it("pins kong's nginx worker count instead of sizing to host CPUs", async () => {
+    const { doc } = await renderDoc();
+    const env = doc.services.kong?.environment as Record<string, unknown>;
+    expect(env.KONG_NGINX_WORKER_PROCESSES).toBe(KONG_WORKER_PROCESSES);
   });
 });
 

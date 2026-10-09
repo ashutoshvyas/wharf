@@ -432,6 +432,74 @@ function joinNetwork(service: ComposeService, network: string, alias?: string): 
   service.networks = current;
 }
 
+/**
+ * Health-check cadence applied to every service that declares one.
+ *
+ * Upstream probes most services every 5s — tuned for one stack on a laptop.
+ * Each probe is a `docker exec` (studio's spawns a whole Node.js runtime), so
+ * a server with a dozen instances spends a CPU core or more on probes alone.
+ * Nothing acts on "unhealthy" after startup: `restart: unless-stopped` only
+ * reacts to process exit and WHARF's own health phase probes over SSH
+ * (./health.ts). The status only gates `depends_on: service_healthy` at
+ * start, so probe fast until the first success (`start_interval`, Docker
+ * Engine 25+; older engines ignore it and fall back to `interval`), then idle.
+ */
+export const HEALTHCHECK_POLICY = {
+  interval: "60s",
+  start_interval: "3s",
+  start_period: "180s",
+} as const;
+
+/**
+ * Per-service CPU/memory caps, so one runaway container (or one tenant) can't
+ * starve every other instance on the server. Every long-running service must
+ * have an entry — renderCompose throws otherwise. One-shot init services are
+ * exempt. db has no memory cap on purpose: an OOM-killed Postgres is worse
+ * than the problem this solves, and its footprint varies with tenant data.
+ */
+export const SERVICE_LIMITS: Record<string, { cpus: number; mem_limit?: string }> = {
+  studio: { cpus: 0.5, mem_limit: "768m" },
+  kong: { cpus: 1, mem_limit: "512m" },
+  auth: { cpus: 0.5, mem_limit: "256m" },
+  rest: { cpus: 1, mem_limit: "512m" },
+  realtime: { cpus: 0.5, mem_limit: "512m" },
+  storage: { cpus: 0.5, mem_limit: "512m" },
+  imgproxy: { cpus: 0.5, mem_limit: "512m" },
+  meta: { cpus: 0.25, mem_limit: "384m" },
+  db: { cpus: 2 },
+  minio: { cpus: 0.5, mem_limit: "512m" },
+  lakekeeper: { cpus: 0.5, mem_limit: "256m" },
+};
+
+/**
+ * Kong's default `worker_processes auto` sizes to the HOST's CPU count, not
+ * the container's cap — on a large server that is many LuaJIT workers per
+ * instance, which would blow through kong's mem_limit above.
+ */
+export const KONG_WORKER_PROCESSES = "2";
+
+/** Apply HEALTHCHECK_POLICY and SERVICE_LIMITS to every service in `doc`. */
+function applyRuntimePolicy(doc: ComposeFile, templatePath: string): void {
+  for (const [name, service] of Object.entries(doc.services)) {
+    const healthcheck = service.healthcheck as Record<string, unknown> | undefined;
+    if (healthcheck && !healthcheck.disable) Object.assign(healthcheck, HEALTHCHECK_POLICY);
+
+    if (service.restart === "no") continue;
+    const limits = SERVICE_LIMITS[name];
+    if (!limits) {
+      throw new Error(
+        `Service ${name} in ${templatePath} has no entry in SERVICE_LIMITS — add CPU/memory caps for it in render.ts.`,
+      );
+    }
+    Object.assign(service, limits);
+  }
+
+  const kongEnv = doc.services.kong?.environment;
+  if (kongEnv && typeof kongEnv === "object" && !Array.isArray(kongEnv)) {
+    (kongEnv as Record<string, unknown>).KONG_NGINX_WORKER_PROCESSES = KONG_WORKER_PROCESSES;
+  }
+}
+
 /** Render the instance's docker-compose.yml from the vendored template. */
 async function renderCompose(
   input: RenderInstanceInput,
@@ -482,6 +550,8 @@ async function renderCompose(
       delete (authEnv as Record<string, unknown>).GOTRUE_HOOK_SEND_SMS_SECRETS;
     }
   }
+
+  applyRuntimePolicy(doc, templatePath);
 
   joinNetwork(kong, TRAEFIK_NETWORK);
   joinNetwork(studio, TRAEFIK_NETWORK);
