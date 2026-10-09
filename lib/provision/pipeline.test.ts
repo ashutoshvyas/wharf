@@ -50,7 +50,8 @@ vi.mock("./health", () => ({
 }));
 
 const renderMock = vi.fn();
-vi.mock("./render", () => ({
+vi.mock("./render", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./render")>()),
   renderInstanceCompose: (...a: unknown[]) => renderMock(...a),
 }));
 
@@ -436,6 +437,24 @@ describe("retryProvision", () => {
     // The rendered compose/.env must carry the ORIGINAL password.
     const rendered = renderMock.mock.calls[0]![0] as { secrets: { pgPassword: string } };
     expect(rendered.secrets.pgPassword).toBe("stored-pw");
+  });
+
+  it("re-renders a retried instance with its stored settings, not defaults", async () => {
+    instanceFindUnique.mockResolvedValue({
+      ...ROW,
+      status: "error",
+      emailTemplates: [{ flow: "invite", subject: "Join us", bodyHtml: "<p>hi</p>" }],
+      analyticsSettings: { enabled: true },
+    });
+
+    await retryProvision("inst-1", { userId: "u1", userEmail: "a@b.c" });
+    await watchJob(provisionJobId("inst-1"));
+
+    expect(renderMock).toHaveBeenCalledWith(expect.objectContaining({
+      analyticsSettings: { enabled: true },
+      emailTemplates: [{ flow: "invite", subject: "Join us", hasBody: true }],
+      instanceId: "inst-1",
+    }));
   });
 
   it("generates secrets when the instance never stored any", async () => {

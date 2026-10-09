@@ -170,6 +170,30 @@ describe("applyAuthSettings", () => {
     release();
   });
 
+  it("keeps the stored analytics toggle and templates — saving Auth settings must not reset them", async () => {
+    instanceFindFirst.mockResolvedValue({
+      ...ROW,
+      emailTemplates: [{ flow: "invite", subject: "Join us", bodyHtml: "<p>hi</p>" }],
+      analyticsSettings: { enabled: true },
+    });
+    await applyAuthSettings("inst-1", SETTINGS);
+    expect(renderMock).toHaveBeenCalledWith(expect.objectContaining({
+      authSettings: SETTINGS,
+      analyticsSettings: { enabled: true },
+      emailTemplates: [{ flow: "invite", subject: "Join us", hasBody: true }],
+    }));
+  });
+
+  it("prefers explicitly passed templates over the stored ones", async () => {
+    instanceFindFirst.mockResolvedValue({
+      ...ROW,
+      emailTemplates: [{ flow: "invite", subject: "Old", bodyHtml: null }],
+    });
+    const templates = toEmailTemplateValues([{ flow: "invite", subject: "New", bodyHtml: null }]);
+    await applyAuthSettings("inst-1", SETTINGS, templates);
+    expect(renderMock).toHaveBeenCalledWith(expect.objectContaining({ emailTemplates: templates }));
+  });
+
   it("re-renders with the given settings, uploads both files, restarts only auth", async () => {
     const res = await applyAuthSettings("inst-1", SETTINGS);
     expect(res).toEqual({ ok: true });

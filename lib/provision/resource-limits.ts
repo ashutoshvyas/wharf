@@ -31,8 +31,8 @@ import {
 } from "@/lib/instances/resource-limits";
 import { serverLockHolder, tryAcquireServerLock } from "@/lib/jobs/lock";
 import { exec, sftpWrite, withConnection } from "@/lib/ssh";
-import { decryptAuthSettings } from "./auth-settings";
-import { EMAIL_TEMPLATE_FLOWS, renderInstanceCompose } from "./render";
+import { renderInstanceCompose } from "./render";
+import { STORED_SETTINGS_INCLUDE, storedRenderSettings } from "./stored-settings";
 import { shellQuote } from "./restore-core";
 
 /** The connection handle lib/ssh hands out (ssh2 Client, never imported here). */
@@ -129,19 +129,8 @@ export async function containersOutsideSlice(conn: SshConnection, project: strin
     .filter((line) => line.startsWith("parent=") && line !== inSlice).length;
 }
 
-type InstanceWithSettings = DbInstance & {
-  authSettings: Parameters<typeof decryptAuthSettings>[0];
-  emailTemplates: { flow: string; subject: string | null; bodyHtml: string | null }[];
-  analyticsSettings: { enabled: boolean } | null;
-};
-
-/**
- * Re-render from EVERYTHING stored for the instance — auth settings, email
- * templates and the analytics toggle. A partial input would silently reset
- * whichever settings it left out, and `up -d` would push that to the server.
- */
-async function renderFromStoredSettings(instance: InstanceWithSettings) {
-  const byFlow = new Map(instance.emailTemplates.map((t) => [t.flow, t]));
+/** Re-render from everything stored — see lib/provision/stored-settings.ts. */
+function renderFromStoredSettings(instance: DbInstance & Parameters<typeof storedRenderSettings>[0]) {
   return renderInstanceCompose({
     slug: instance.slug,
     project: instance.composeProjectName,
@@ -153,14 +142,7 @@ async function renderFromStoredSettings(instance: InstanceWithSettings) {
       serviceRoleKey: open(instance.serviceRoleKeyEnc!),
     },
     remotePath: instance.remotePath,
-    authSettings: decryptAuthSettings(instance.authSettings),
-    emailTemplates: EMAIL_TEMPLATE_FLOWS.map((flow) => {
-      const row = byFlow.get(flow);
-      return { flow, subject: row?.subject ?? "", hasBody: !!row?.bodyHtml };
-    }),
-    analyticsSettings: { enabled: instance.analyticsSettings?.enabled ?? false },
-    instanceId: instance.id,
-    panelUrl: process.env.PANEL_URL,
+    ...storedRenderSettings(instance),
   });
 }
 
@@ -182,7 +164,7 @@ export async function applyResourceLimits(
 ): Promise<ApplyResourceLimitsResult> {
   const instance = await prisma.dbInstance.findFirst({
     where: { id: instanceId, deletedAt: null },
-    include: { authSettings: true, emailTemplates: true, analyticsSettings: true },
+    include: STORED_SETTINGS_INCLUDE,
   });
   if (!instance) return { notFound: true };
   if (

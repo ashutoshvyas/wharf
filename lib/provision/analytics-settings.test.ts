@@ -61,6 +61,29 @@ beforeEach(() => {
 });
 
 describe("applyAnalyticsSettings", () => {
+  it("keeps the stored Auth settings and email templates — toggling analytics must not reset them", async () => {
+    instanceFindFirst.mockResolvedValue({
+      ...ROW,
+      authSettings: { googleEnabled: true, googleClientId: "configured-google-id", smtpHost: "smtp.example.com" },
+      emailTemplates: [{ flow: "invite", subject: "Join us", bodyHtml: "<p>hi</p>" }],
+      analyticsSettings: { enabled: false },
+    });
+    await applyAnalyticsSettings("inst-1", true);
+    expect(renderMock).toHaveBeenCalledWith(expect.objectContaining({
+      analyticsSettings: { enabled: true },
+      authSettings: expect.objectContaining({
+        googleEnabled: true,
+        googleClientId: "configured-google-id",
+        smtpHost: "smtp.example.com",
+      }),
+      emailTemplates: [{ flow: "invite", subject: "Join us", hasBody: true }],
+      instanceId: "inst-1",
+    }));
+    expect(instanceFindFirst).toHaveBeenCalledWith(expect.objectContaining({
+      include: { authSettings: true, emailTemplates: true, analyticsSettings: true },
+    }));
+  });
+
   it("refuses an instance with no stored secrets", async () => {
     instanceFindFirst.mockResolvedValue({ ...ROW, pgPasswordEnc: null });
     await expect(applyAnalyticsSettings("inst-1", true)).rejects.toThrow(/no stored secrets/);

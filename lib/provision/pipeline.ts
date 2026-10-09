@@ -51,6 +51,7 @@ import { provisionJobId } from "./job-ids";
 import { composeProjectName, isValidSlug, remotePathFor, subdomainsFor } from "./naming";
 import { assertPoolerNetworkPolicy, readPoolerNetworkState, registerPoolerTenant } from "./pooler";
 import { renderInstanceCompose } from "./render";
+import { STORED_SETTINGS_INCLUDE, storedRenderSettings, type StoredRenderSettings } from "./stored-settings";
 import { generateInstanceSecrets, type InstanceSecrets } from "./secrets";
 import { loadStaticVolumeFiles } from "./static-volumes";
 
@@ -171,6 +172,12 @@ interface PipelineRow {
   networkAccess: NetworkAccessPolicy | null;
   resourceLimits: ResourceLimits;
   /**
+   * Auth settings, email templates and analytics toggle to render with. A
+   * retried instance may already have them saved, and the `up -d` below must
+   * not reset them to defaults.
+   */
+  renderSettings: StoredRenderSettings;
+  /**
    * Secrets already stored for this instance, when there are any — retry
    * REUSES them instead of minting new ones. See {@link resolveSecrets}.
    */
@@ -274,6 +281,7 @@ async function runPipeline(
           domain,
           secrets: generated,
           remotePath: row.remotePath,
+          ...row.renderSettings,
         }),
       );
 
@@ -594,6 +602,8 @@ export async function startProvision(input: {
       sslMode: input.sslMode,
       networkAccess: DEFAULT_NETWORK_ACCESS,
       resourceLimits: { cpuLimit: created.cpuLimit, memoryLimitMb: created.memoryLimitMb },
+      // Nothing is stored yet for a new row — renders exactly the defaults.
+      renderSettings: storedRenderSettings({ id: created.id }),
     };
   } catch (err) {
     release();
@@ -623,7 +633,10 @@ export async function retryProvision(
   instanceId: string,
   ctx: ProvisionCtx,
 ): Promise<RetryProvisionResult> {
-  let instance = await prisma.dbInstance.findUnique({ where: { id: instanceId } });
+  let instance = await prisma.dbInstance.findUnique({
+    where: { id: instanceId },
+    include: STORED_SETTINGS_INCLUDE,
+  });
   if (!instance || instance.deletedAt) {
     return { invalid: `Instance ${instanceId} was not found.` };
   }
@@ -640,7 +653,10 @@ export async function retryProvision(
 
   const jobId = provisionJobId(instanceId);
   try {
-    const current = await prisma.dbInstance.findUnique({ where: { id: instanceId } });
+    const current = await prisma.dbInstance.findUnique({
+      where: { id: instanceId },
+      include: STORED_SETTINGS_INCLUDE,
+    });
     if (!current || current.deletedAt || current.status !== "error") {
       release();
       return { invalid: "The instance is no longer available for provisioning retry." };
@@ -680,6 +696,7 @@ export async function retryProvision(
       sslMode: instance.sslMode,
       networkAccess: readNetworkAccess(instance.networkAccess),
       resourceLimits: { cpuLimit: instance.cpuLimit, memoryLimitMb: instance.memoryLimitMb },
+      renderSettings: storedRenderSettings(instance),
       // Retry keeps this instance's identity — see resolveSecrets.
       existingSecrets: readStoredSecrets(instance),
     },

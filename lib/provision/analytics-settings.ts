@@ -23,6 +23,7 @@ import { open } from "@/lib/crypto";
 import { serverLockHolder, tryAcquireServerLock } from "@/lib/jobs/lock";
 import { exec, sftpWrite, withConnection } from "@/lib/ssh";
 import { renderInstanceCompose } from "./render";
+import { STORED_SETTINGS_INCLUDE, storedRenderSettings } from "./stored-settings";
 
 /** The connection handle lib/ssh hands out (ssh2 Client, never imported here). */
 type SshConnection = Parameters<typeof exec>[0];
@@ -49,6 +50,7 @@ export async function applyAnalyticsSettings(
 ): Promise<ApplyAnalyticsSettingsResult> {
   const instance = await prisma.dbInstance.findFirst({
     where: { id: instanceId, deletedAt: null },
+    include: STORED_SETTINGS_INCLUDE,
   });
   if (!instance) {
     throw new Error(`Instance ${instanceId} was not found.`);
@@ -80,6 +82,9 @@ export async function applyAnalyticsSettings(
         serviceRoleKey: open(instance.serviceRoleKeyEnc),
       },
       remotePath: instance.remotePath,
+      // Auth settings and email templates as stored — leaving them out would
+      // reset the instance's OAuth/SMTP/SMS config on the `up -d` below.
+      ...storedRenderSettings(instance),
       analyticsSettings: { enabled },
     });
 

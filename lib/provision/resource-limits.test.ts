@@ -25,7 +25,6 @@ vi.mock("@/lib/crypto", () => ({ open: () => "decrypted" }));
 const renderMock = vi.fn();
 vi.mock("./render", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./render")>()),
-  EMAIL_TEMPLATE_FLOWS: ["invite", "recovery"],
   renderInstanceCompose: (...args: unknown[]) => renderMock(...args),
 }));
 
@@ -129,10 +128,7 @@ describe("applyResourceLimits", () => {
     expect(result).toMatchObject({ ok: true, recreated: true });
     expect(renderMock).toHaveBeenCalledWith(expect.objectContaining({
       analyticsSettings: { enabled: true },
-      emailTemplates: [
-        { flow: "invite", subject: "Join us", hasBody: true },
-        { flow: "recovery", subject: "", hasBody: false },
-      ],
+      emailTemplates: [{ flow: "invite", subject: "Join us", hasBody: true }],
       authSettings: expect.objectContaining({ enableEmailSignup: true }),
       instanceId: "inst-1",
     }));
